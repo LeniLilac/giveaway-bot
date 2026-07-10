@@ -70,7 +70,11 @@ async function isAuthorized(
   if (interaction.guild.ownerId === interaction.user.id) return true;
   const member = interaction.member;
   if (member && "permissions" in member) {
-    const permissions = new PermissionsBitField(member.permissions);
+    const bits =
+      typeof member.permissions === "string"
+        ? BigInt(member.permissions)
+        : member.permissions.bitfield;
+    const permissions = new PermissionsBitField(bits);
     if (
       permissions.has(PermissionsBitField.Flags.Administrator) ||
       permissions.has(PermissionsBitField.Flags.ManageGuild)

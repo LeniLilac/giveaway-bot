@@ -4,7 +4,7 @@ import {
   canonicalCandidates,
   selectWeightedWinners,
   type Candidate,
-} from "./selection";
+} from "./selection.js";
 
 const candidates: Candidate[] = [
   { userId: "3", username: "three", joinedAt: new Date("2026-01-01T00:00:02Z"), weight: 1 },

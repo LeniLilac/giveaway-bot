@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseBonusRoles, parseDuration, parseRoleIds, parseStart } from "./parsing";
+import { parseBonusRoles, parseDuration, parseRoleIds, parseStart } from "./parsing.js";
 
 describe("Discord command parsing", () => {
   it("accepts compact, spaced, and reordered duration units", () => {
