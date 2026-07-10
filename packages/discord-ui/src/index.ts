@@ -1,5 +1,3 @@
-import type { BonusRole, Giveaway } from "@lilac/core";
-
 export const COMPONENTS_V2_FLAG = 1 << 15;
 
 const ComponentType = {
@@ -20,7 +18,24 @@ const ButtonStyle = {
 
 export type ApiComponent = Record<string, unknown>;
 
-export interface GiveawayView extends Giveaway {
+export interface BonusRole {
+  roleId: string;
+  bonusEntries: number;
+}
+
+export interface GiveawayView {
+  id: string;
+  creatorUserId: string;
+  hostUserId: string | null;
+  prize: string;
+  status: string;
+  winnerCount: number;
+  participantCount: number;
+  scheduledStartAt: Date;
+  endsAt: Date;
+  endedAt: Date | null;
+  requiredRoleMode: "all" | "one" | null;
+  requiredMessages: number | null;
   requiredRoleIds: string[];
   bonusRoles: BonusRole[];
 }
