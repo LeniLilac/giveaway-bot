@@ -48,10 +48,10 @@ npm install
 
 The ignored `.local/` directory contains separate stubs for Discord, Doppler, GitHub, VPS, and DNS provisioning. Runtime code does not load those files.
 
-Create Doppler `giveaway-bot/dev` and add values based on `doppler.secrets.env.example`:
+Create Doppler `lilac-giveaway-bot/dev` and add values based on `doppler.secrets.env.example`:
 
 ```bash
-doppler setup --project giveaway-bot --config dev
+doppler setup --project lilac-giveaway-bot --config dev
 doppler secrets upload doppler.secrets.env.example
 ```
 
@@ -94,7 +94,7 @@ Place Lilac's role above every prize role it should award. Message Content inten
 Register global production commands:
 
 ```bash
-doppler run --project giveaway-bot --config prd -- npm run deploy-commands -w @giveaway/bot
+doppler run --project lilac-giveaway-bot --config prd -- npm run deploy-commands -w @lilac/bot
 ```
 
 ## Duration and role input
@@ -121,7 +121,7 @@ Months are 30 days and years are 365 days. A late scheduled start receives its f
 Production runs at `/opt/giveaway-bot` on the same VPS as Vanguard. Compose creates a dedicated PostgreSQL service and joins the existing `vanguard-qc-bot_default` network only for Caddy-to-web traffic.
 
 1. Run `ops/bootstrap-vps.sh` once as root.
-2. Create Doppler `giveaway-bot/prd` with every secret in the example.
+2. Create Doppler `lilac-giveaway-bot/prd` with every secret in the example.
 3. Add GitHub Actions secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, and `DOPPLER_TOKEN`.
 4. Add `ops/Caddyfile.snippet` to the Vanguard Caddyfile.
 5. Push `main`. CI completion triggers deployment.

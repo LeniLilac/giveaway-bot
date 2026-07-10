@@ -8,9 +8,9 @@ Push `main` or run the Deploy workflow manually. The remote script fast-forwards
 
 ```bash
 cd /opt/giveaway-bot
-doppler run --project giveaway-bot --config prd -- docker compose ps
-doppler run --project giveaway-bot --config prd -- docker compose logs --tail=200 worker
-doppler run --project giveaway-bot --config prd -- docker compose logs --tail=200 bot
+doppler run --project lilac-giveaway-bot --config prd -- docker compose ps
+doppler run --project lilac-giveaway-bot --config prd -- docker compose logs --tail=200 worker
+doppler run --project lilac-giveaway-bot --config prd -- docker compose logs --tail=200 bot
 ```
 
 Do not paste logs containing participant data into public issues.
@@ -19,7 +19,7 @@ Do not paste logs containing participant data into public issues.
 
 ```bash
 cd /opt/giveaway-bot
-doppler run --project giveaway-bot --config prd -- \
+doppler run --project lilac-giveaway-bot --config prd -- \
   docker compose exec -T postgres pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB" \
   > "giveaway-$(date +%Y%m%d-%H%M%S).dump"
 ```

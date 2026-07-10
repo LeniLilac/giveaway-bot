@@ -3,7 +3,7 @@ set -euo pipefail
 
 DEPLOY_PATH="${DEPLOY_PATH:-/opt/giveaway-bot}"
 REPOSITORY="${GITHUB_REPOSITORY:-LeniLilac/giveaway-bot}"
-DOPPLER_PROJECT="${DOPPLER_PROJECT:-giveaway-bot}"
+DOPPLER_PROJECT="${DOPPLER_PROJECT:-lilac-giveaway-bot}"
 DOPPLER_CONFIG="${DOPPLER_CONFIG:-prd}"
 
 if [[ -z "${DOPPLER_TOKEN:-}" ]]; then

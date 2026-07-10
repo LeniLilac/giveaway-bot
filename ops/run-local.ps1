@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $project = $env:DOPPLER_PROJECT
-if (-not $project) { $project = "giveaway-bot" }
+if (-not $project) { $project = "lilac-giveaway-bot" }
 $config = $env:DOPPLER_CONFIG
 if (-not $config) { $config = "dev" }
 

@@ -72,7 +72,7 @@ Lilac Giveaway Bot runs Discord giveaways whose entry snapshot, drand beacon, an
 
 - Never commit tokens, passwords, private keys, OAuth credentials, or copied Doppler values.
 - `.local/` is ignored and may contain provisioning values. Do not read or print its populated contents in logs, tests, issues, or pull requests.
-- Production values live in Doppler project `giveaway-bot`.
+- Production values live in Doppler project `lilac-giveaway-bot`.
 - OAuth tokens must remain encrypted at rest; browser session tokens must remain hashed.
 - Logs may include giveaway, guild, job, and draw IDs. Do not log OAuth tokens, Discord tokens, session cookies, participant payloads, or raw HTTP authorization headers.
 - Preserve one-time consent before the first entry in a guild.
