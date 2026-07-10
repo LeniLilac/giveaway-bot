@@ -2,11 +2,10 @@ import { REST, Routes, type APIMessage } from "discord.js";
 import {
   COMPONENTS_V2_FLAG,
   giveawayComponents,
-  proofPendingComponents,
   simpleNotice,
   winnerComponents,
 } from "@lilac/discord-ui";
-import type { DrawRow, WorkerGiveaway } from "./database.js";
+import type { WorkerGiveaway } from "./database.js";
 
 export interface DiscordMember {
   user?: { id: string; username: string; bot?: boolean };
@@ -54,28 +53,6 @@ export class DiscordApi {
     await this.rest.patch(Routes.channelMessage(giveaway.channelId, giveaway.messageId), {
       body: {
         components: giveawayComponents(giveaway as never),
-        allowed_mentions: { parse: [] },
-      },
-    });
-  }
-
-  async postCommitment(giveaway: WorkerGiveaway, draw: DrawRow): Promise<void> {
-    if (!giveaway.messageId) return;
-    await this.rest.post(Routes.channelMessages(giveaway.channelId), {
-      body: {
-        flags: COMPONENTS_V2_FLAG,
-        components: proofPendingComponents(
-          giveaway as never,
-          draw.candidateHash,
-          draw.drandRound,
-          `${this.websiteUrl}/g/${giveaway.id}`,
-        ),
-        message_reference: {
-          message_id: giveaway.messageId,
-          channel_id: giveaway.channelId,
-          guild_id: giveaway.guildId,
-          fail_if_not_exists: false,
-        },
         allowed_mentions: { parse: [] },
       },
     });

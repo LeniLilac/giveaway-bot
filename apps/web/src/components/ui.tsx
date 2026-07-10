@@ -3,6 +3,7 @@ import type { DiscordGuild, SessionUser } from "../lib/auth";
 import { avatarUrl } from "../lib/auth";
 import { queueGiveawayAction } from "../lib/actions";
 import type { AuditEvent, DashboardGiveaway } from "../lib/queries";
+import { LocalTime, LocalTimeTitle } from "./local-time";
 
 export function Mark(): React.ReactElement {
   return (
@@ -192,9 +193,7 @@ export function GiveawayTable({
                 {giveaway.participantCount.toLocaleString()} / {giveaway.winnerCount} winners
               </td>
               <td data-label="Timing">
-                <time dateTime={(giveaway.endsAt ?? giveaway.scheduledStartAt).toISOString()}>
-                  {(giveaway.endsAt ?? giveaway.scheduledStartAt).toLocaleString()}
-                </time>
+                <LocalTime value={(giveaway.endsAt ?? giveaway.scheduledStartAt).toISOString()} />
               </td>
               <td className="table-actions">
                 <Link className="button button-quiet button-small" href={`/g/${giveaway.id}`}>
@@ -238,9 +237,7 @@ export function AuditList({ events }: { events: AuditEvent[] }): React.ReactElem
               {event.actorUserId ? `User ${event.actorUserId}` : "System"} via {event.source}
             </span>
           </div>
-          <time dateTime={event.occurredAt.toISOString()}>
-            {event.occurredAt.toLocaleString()}
-          </time>
+          <LocalTime value={event.occurredAt.toISOString()} />
         </li>
       ))}
     </ol>
@@ -265,10 +262,11 @@ export function ActivityGraph({
       </div>
       <div className="graph-bars">
         {visible.map((point) => (
-          <div
+          <LocalTimeTitle
             className="graph-column"
             key={point.bucket.toISOString()}
-            title={`${point.bucket.toLocaleString()}: ${point.joins} joins, ${point.leaves} leaves`}
+            value={point.bucket.toISOString()}
+            suffix={`${point.joins} joins, ${point.leaves} leaves`}
           >
             <span
               className="bar joins"
@@ -278,12 +276,12 @@ export function ActivityGraph({
               className="bar leaves"
               style={{ height: `${Math.max(2, (point.leaves / maximum) * 100)}%` }}
             />
-          </div>
+          </LocalTimeTitle>
         ))}
       </div>
       <div className="graph-axis">
-        <time>{visible[0]!.bucket.toLocaleDateString()}</time>
-        <time>{visible.at(-1)!.bucket.toLocaleDateString()}</time>
+        <LocalTime dateOnly value={visible[0]!.bucket.toISOString()} />
+        <LocalTime dateOnly value={visible.at(-1)!.bucket.toISOString()} />
       </div>
     </div>
   );

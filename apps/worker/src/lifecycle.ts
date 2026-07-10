@@ -227,7 +227,7 @@ async function prepareDraw(
   const info = await chainInfo(dependencies);
   const target = Math.ceil(Date.now() / 1000) + 15;
   const round = roundAtOrAfter(info, target);
-  const draw = await createDrawCommitment(pool, {
+  await createDrawCommitment(pool, {
     giveaway,
     candidates,
     exclusions,
@@ -240,7 +240,6 @@ async function prepareDraw(
   const committed = await getGiveaway(pool, giveaway.id);
   if (committed) {
     await discord.refreshGiveaway(committed);
-    await discord.postCommitment(committed, draw);
   }
 }
 

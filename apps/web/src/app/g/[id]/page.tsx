@@ -8,14 +8,11 @@ import {
   SiteHeader,
   Status,
 } from "../../../components/ui";
+import { LocalTime } from "../../../components/local-time";
 import { getSession } from "../../../lib/auth";
 import { getPublicGiveaway } from "../../../lib/queries";
 
 export const dynamic = "force-dynamic";
-
-function date(value: Date | null): string {
-  return value ? value.toLocaleString() : "Not yet";
-}
 
 function participantAvatar(userId: string, avatarHash: string | null): string | null {
   if (!avatarHash || !/^\d+$/.test(userId)) return null;
@@ -73,7 +70,7 @@ export default async function PublicGiveawayPage({
             <h1>{giveaway.prize}</h1>
             <p>
               Hosted by {giveaway.hostUserId ? `Discord user ${giveaway.hostUserId}` : "a deleted user"}.
-              Created {date(giveaway.createdAt)}.
+              Created <LocalTime value={giveaway.createdAt.toISOString()} />.
             </p>
           </div>
           <div className="heading-actions">
@@ -103,8 +100,8 @@ export default async function PublicGiveawayPage({
             <section className="fact-strip" aria-label="Giveaway summary">
               <div><small>Participants</small><strong>{giveaway.participantCount.toLocaleString()}</strong></div>
               <div><small>Winners requested</small><strong>{giveaway.winnerCount.toLocaleString()}</strong></div>
-              <div><small>Started</small><strong>{date(giveaway.startedAt)}</strong></div>
-              <div><small>{giveaway.endedAt ? "Ended" : "Ends"}</small><strong>{date(giveaway.endedAt ?? giveaway.endsAt)}</strong></div>
+              <div><small>Started</small><strong><LocalTime value={giveaway.startedAt?.toISOString() ?? null} /></strong></div>
+              <div><small>{giveaway.endedAt ? "Ended" : "Ends"}</small><strong><LocalTime value={(giveaway.endedAt ?? giveaway.endsAt)?.toISOString() ?? null} /></strong></div>
             </section>
 
             <section className="evidence-section proof-section">
@@ -137,7 +134,7 @@ export default async function PublicGiveawayPage({
                     </div>
                     <div>
                       <dt>Beacon available at</dt>
-                      <dd><time>{date(latestDraw.drandBeaconTime)}</time></dd>
+                      <dd><LocalTime value={latestDraw.drandBeaconTime.toISOString()} /></dd>
                     </div>
                     <div>
                       <dt>Randomness</dt>
@@ -251,7 +248,7 @@ export default async function PublicGiveawayPage({
                       </span>
                       <span>
                         <small>Joined</small>
-                        <time>{date(participant.joinedAt)}</time>
+                        <LocalTime value={participant.joinedAt.toISOString()} />
                       </span>
                       <span>
                         <small>Draw status</small>

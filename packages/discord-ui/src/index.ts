@@ -206,26 +206,6 @@ export function winnerComponents(
   ];
 }
 
-export function proofPendingComponents(
-  giveaway: GiveawayView,
-  candidateHash: string,
-  round: bigint,
-  websiteUrl: string,
-): ApiComponent[] {
-  return [
-    container(
-      [
-        text("### Winner selection committed"),
-        text(
-          `Candidate snapshot: **${candidateHash}**\nDrand round: **${round.toString()}**\nThe winner calculation will run after this public beacon is available.`,
-        ),
-        row(button("Inspect verification data", ButtonStyle.Link, undefined, websiteUrl)),
-      ],
-      0x5865f2,
-    ),
-  ];
-}
-
 export interface GiveawayPickerPagination {
   page: number;
   pageAction: "start" | "queue" | "list";
