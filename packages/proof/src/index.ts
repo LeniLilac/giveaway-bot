@@ -56,7 +56,9 @@ export function bytesToHex(value: Uint8Array): string {
 
 export async function sha256(value: Uint8Array | string): Promise<Uint8Array> {
   const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
-  return new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", bytes));
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", copy.buffer));
 }
 
 export async function hashSnapshot(snapshot: DrawSnapshot): Promise<string> {

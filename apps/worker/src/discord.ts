@@ -5,7 +5,7 @@ import {
   proofPendingComponents,
   simpleNotice,
   winnerComponents,
-} from "@giveaway/discord-ui";
+} from "@lilac/discord-ui";
 import type { DrawRow, WorkerGiveaway } from "./database.js";
 
 export interface DiscordMember {

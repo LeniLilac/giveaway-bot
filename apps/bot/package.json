@@ -1,18 +1,19 @@
 {
-  "name": "@giveaway/bot",
+  "name": "@lilac/bot",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "build": "tsc --noEmit",
     "deploy-commands": "tsx src/deploy-commands.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@giveaway/core": "file:../../packages/core",
-    "@giveaway/config": "file:../../packages/config",
-    "@giveaway/discord-ui": "file:../../packages/discord-ui",
+    "@lilac/core": "file:../../packages/core",
+    "@lilac/config": "file:../../packages/config",
+    "@lilac/discord-ui": "file:../../packages/discord-ui",
     "discord.js": "14.26.5",
     "pg": "8.22.0",
     "pino": "10.3.1",

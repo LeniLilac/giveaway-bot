@@ -1,7 +1,7 @@
 import { Client, Events, GatewayIntentBits } from "discord.js";
 import { Pool } from "pg";
 import pino from "pino";
-import { startHealthServer } from "@giveaway/core";
+import { startHealthServer } from "@lilac/core";
 import { handleAutocomplete, handleButton, handleChatInput } from "./interactions.js";
 
 const required = (name: string): string => {

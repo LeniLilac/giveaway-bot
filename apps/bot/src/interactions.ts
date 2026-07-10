@@ -17,7 +17,7 @@ import {
   giveawayPickerComponents,
   requirementDecisionComponents,
   simpleNotice,
-} from "@giveaway/discord-ui";
+} from "@lilac/discord-ui";
 import { parseBonusRoles, parseDuration, parseRoleIds, parseStart } from "./parsing.js";
 import {
   cancelDraft,

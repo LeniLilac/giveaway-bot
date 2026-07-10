@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import pino from "pino";
-import { startHealthServer } from "@giveaway/core";
+import { startHealthServer } from "@lilac/core";
 import { claimJob, completeJob, retryJob } from "./database.js";
 import { DiscordApi } from "./discord.js";
 import { processJob } from "./lifecycle.js";

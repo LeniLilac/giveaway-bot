@@ -1,4 +1,4 @@
-import type { BonusRole, Giveaway } from "@giveaway/core";
+import type { BonusRole, Giveaway } from "@lilac/core";
 
 export const COMPONENTS_V2_FLAG = 1 << 15;
 

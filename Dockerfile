@@ -18,19 +18,19 @@ COPY . .
 
 FROM workspace AS bot
 ENV NODE_ENV=production
-CMD ["npm", "run", "start", "-w", "@giveaway/bot"]
+CMD ["npm", "run", "start", "-w", "@lilac/bot"]
 
 FROM workspace AS worker
 ENV NODE_ENV=production
-CMD ["npm", "run", "start", "-w", "@giveaway/worker"]
+CMD ["npm", "run", "start", "-w", "@lilac/worker"]
 
 FROM workspace AS migrate
 ENV NODE_ENV=production
-CMD ["npm", "run", "migrate", "-w", "@giveaway/db"]
+CMD ["npm", "run", "migrate", "-w", "@lilac/db"]
 
 FROM workspace AS web-build
-RUN npm run build -w @giveaway/web
+RUN npm run build -w @lilac/web
 
 FROM web-build AS web
 ENV NODE_ENV=production
-CMD ["npm", "run", "start", "-w", "@giveaway/web"]
+CMD ["npm", "run", "start", "-w", "@lilac/web"]
