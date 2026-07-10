@@ -16,6 +16,12 @@ RUN npm ci
 
 COPY . .
 
+RUN npm run build -w @lilac/config \
+    && npm run build -w @lilac/core \
+    && npm run build -w @lilac/proof \
+    && npm run build -w @lilac/db \
+    && npm run build -w @lilac/discord-ui
+
 FROM workspace AS bot
 ENV NODE_ENV=production
 CMD ["npm", "run", "start", "-w", "@lilac/bot"]
