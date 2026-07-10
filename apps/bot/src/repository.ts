@@ -343,50 +343,22 @@ export async function listGiveaways(
   statuses: GiveawayStatus[],
   creatorUserId?: string,
   limit = 20,
+  offset = 0,
 ): Promise<GiveawayRecord[]> {
-  const params: unknown[] = [guildId, statuses, limit];
+  const params: unknown[] = [guildId, statuses, limit, offset];
   let creatorFilter = "";
   if (creatorUserId) {
     params.push(creatorUserId);
-    creatorFilter = " AND g.creator_user_id = $4";
+    creatorFilter = " AND g.creator_user_id = $5";
   }
   const result = await db.query(
     `${GIVEAWAY_SELECT}
      WHERE g.guild_id = $1 AND g.status = ANY($2::text[])${creatorFilter}
      ORDER BY g.scheduled_start_at ASC
-     LIMIT $3`,
+     LIMIT $3 OFFSET $4`,
     params,
   );
   return result.rows.map(mapGiveaway);
-}
-
-export async function hasConsent(
-  db: Queryable,
-  guildId: string,
-  userId: string,
-  policyVersion: string,
-): Promise<boolean> {
-  const result = await db.query(
-    `SELECT 1 FROM privacy_consents
-     WHERE guild_id = $1 AND user_id = $2 AND policy_version = $3 AND revoked_at IS NULL`,
-    [guildId, userId, policyVersion],
-  );
-  return Boolean(result.rows[0]);
-}
-
-export async function recordConsent(
-  db: Queryable,
-  guildId: string,
-  userId: string,
-  policyVersion: string,
-): Promise<void> {
-  await db.query(
-    `INSERT INTO privacy_consents (guild_id, user_id, policy_version)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (guild_id, user_id, policy_version)
-     DO UPDATE SET consented_at = now(), revoked_at = NULL`,
-    [guildId, userId, policyVersion],
-  );
 }
 
 export async function joinGiveaway(

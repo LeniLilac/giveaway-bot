@@ -5,7 +5,7 @@ const schema = z.object({
   LOG_LEVEL: z.string().default("info"),
   PUBLIC_BASE_URL: z.url().default("http://localhost:3000"),
   DISCORD_TOKEN: z.string().min(1),
-  DISCORD_CLIENT_ID: z.string().regex(/^$d+$/),
+  DISCORD_APPLICATION_ID: z.string().regex(/^\d+$/),
   DISCORD_CLIENT_SECRET: z.string().default(""),
   DISCORD_DEV_GUILD_ID: z.string().default(""),
   DATABASE_URL: z.string().min(1),

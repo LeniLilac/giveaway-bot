@@ -75,14 +75,13 @@ Lilac Giveaway Bot runs Discord giveaways whose entry snapshot, drand beacon, an
 - Production values live in Doppler project `lilac-giveaway-bot`.
 - OAuth tokens must remain encrypted at rest; browser session tokens must remain hashed.
 - Logs may include giveaway, guild, job, and draw IDs. Do not log OAuth tokens, Discord tokens, session cookies, participant payloads, or raw HTTP authorization headers.
-- Preserve one-time consent before the first entry in a guild.
 - Privacy deletion must remove sessions and OAuth data and pseudonymize public participant identity.
 
 ## Development
 
 ```bash
 npm install
-doppler run --project giveaway-bot --config dev -- npm run dev
+doppler run --project lilac-giveaway-bot --config dev -- npm run dev
 ```
 
 Useful checks:
@@ -90,8 +89,8 @@ Useful checks:
 ```bash
 npm run typecheck
 npm test
-npm run build -w @giveaway/web
-npm run deploy-commands -w @giveaway/bot
+npm run build -w @lilac/web
+npm run deploy-commands -w @lilac/bot
 ```
 
 Do not run production Discord command registration from a feature branch. Use `DISCORD_DEV_GUILD_ID` for development registration.

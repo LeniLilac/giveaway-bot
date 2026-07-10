@@ -1,32 +1,47 @@
 export const PROOF_SCHEMA = "lilac-giveaway-proof/v1";
 export const SNAPSHOT_SCHEMA = "lilac-giveaway-candidates/v1";
-export const DRAW_ALGORITHM = "lilac-giveaway/draw/v1";
+export const DRAW_ALGORITHM = "lilac-weighted-v1";
 
-export interface DrawCandidate {
+export interface ProofCandidate {
+  userId: string;
+  joinedAt: Date | string;
+  weight: number;
+}
+
+export interface CanonicalCandidate {
   userId: string;
   joinedAt: string;
-  messageCountAtJoin: string | null;
-  matchedBonusRoleIds: string[];
-  baseEntries: "1";
-  bonusEntries: string;
-  weight: string;
+  weight: number;
 }
 
-export interface DrawSnapshot {
-  schema: typeof SNAPSHOT_SCHEMA;
-  giveawayId: string;
-  drawOrdinal: number;
-  closedAt: string;
-  excludedPriorWinnerIds: string[];
-  candidates: DrawCandidate[];
+function candidateTime(candidate: ProofCandidate): number {
+  const value = new Date(candidate.joinedAt).getTime();
+  if (!Number.isFinite(value)) throw new Error("Candidate join time is invalid.");
+  return value;
 }
 
-type CanonicalValue = null | boolean | number | string | CanonicalValue[] | { [key: string]: CanonicalValue };
+function compareCandidates(left: ProofCandidate, right: ProofCandidate): number {
+  const joined = candidateTime(left) - candidateTime(right);
+  if (joined !== 0) return joined;
+  return left.userId < right.userId ? -1 : left.userId > right.userId ? 1 : 0;
+}
 
-export function canonicalJson(value: CanonicalValue): string {
-  if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key]!)}`).join(",")}}`;
+function validateCandidate(candidate: ProofCandidate): void {
+  candidateTime(candidate);
+  if (!Number.isSafeInteger(candidate.weight) || candidate.weight <= 0) {
+    throw new Error("Candidate weights must be positive safe integers.");
+  }
+}
+
+export function canonicalCandidates(candidates: ProofCandidate[]): CanonicalCandidate[] {
+  return [...candidates].sort(compareCandidates).map((candidate) => {
+    validateCandidate(candidate);
+    return {
+      userId: candidate.userId,
+      joinedAt: new Date(candidate.joinedAt).toISOString(),
+      weight: candidate.weight,
+    };
+  });
 }
 
 function concat(...parts: Uint8Array[]): Uint8Array {
@@ -45,8 +60,19 @@ function u64(value: bigint): Uint8Array {
   return output;
 }
 
+function u32(value: number): Uint8Array {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
+    throw new Error("Counter is outside the uint32 range.");
+  }
+  const output = new Uint8Array(4);
+  new DataView(output.buffer).setUint32(0, value, false);
+  return output;
+}
+
 export function hexToBytes(value: string): Uint8Array {
-  if (!/^[a-fA-F0-9]*$/.test(value) || value.length % 2) throw new Error("Invalid hexadecimal value.");
+  if (!/^[a-fA-F0-9]*$/.test(value) || value.length % 2 !== 0) {
+    throw new Error("Invalid hexadecimal value.");
+  }
   return Uint8Array.from(value.match(/.{2}/g) ?? [], (byte) => Number.parseInt(byte, 16));
 }
 
@@ -61,77 +87,66 @@ export async function sha256(value: Uint8Array | string): Promise<Uint8Array> {
   return new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", copy.buffer));
 }
 
-export async function hashSnapshot(snapshot: DrawSnapshot): Promise<string> {
-  return bytesToHex(await sha256(canonicalJson(snapshot as unknown as CanonicalValue)));
+export async function candidateHash(candidates: ProofCandidate[]): Promise<string> {
+  return bytesToHex(await sha256(JSON.stringify(canonicalCandidates(candidates))));
 }
 
-class FenwickTree {
-  readonly tree: bigint[];
-  constructor(weights: bigint[]) {
-    this.tree = Array.from({ length: weights.length + 1 }, () => 0n);
-    weights.forEach((weight, index) => this.add(index, weight));
-  }
-  add(index: number, delta: bigint): void {
-    for (let cursor = index + 1; cursor < this.tree.length; cursor += cursor & -cursor) this.tree[cursor] = this.tree[cursor]! + delta;
-  }
-  total(): bigint {
-    let sum = 0n;
-    for (let cursor = this.tree.length - 1; cursor > 0; cursor -= cursor & -cursor) sum += this.tree[cursor]!;
-    return sum;
-  }
-  findByTicket(ticket: bigint): number {
-    let index = 0;
-    let prefix = 0n;
-    let bit = 1;
-    while ((bit << 1) < this.tree.length) bit <<= 1;
-    for (; bit; bit >>= 1) {
-      const next = index + bit;
-      if (next < this.tree.length && prefix + this.tree[next]! <= ticket) {
-        index = next;
-        prefix += this.tree[next]!;
-      }
-    }
-    return index;
-  }
-}
-
-export async function selectWeightedWinners(args: {
-  snapshot: DrawSnapshot;
-  snapshotHash: string;
-  randomness: string;
-  requestedWinners: bigint;
-}): Promise<string[]> {
-  const candidates = [...args.snapshot.candidates].sort((left, right) => {
-    const a = BigInt(left.userId);
-    const b = BigInt(right.userId);
-    return a < b ? -1 : a > b ? 1 : 0;
-  });
-  const weights = candidates.map((candidate) => BigInt(candidate.weight));
-  if (weights.some((weight) => weight <= 0n)) throw new Error("Candidate weights must be positive.");
-  const picks = Number(args.requestedWinners > BigInt(candidates.length) ? BigInt(candidates.length) : args.requestedWinners);
-  const seed = await sha256(concat(
-    new TextEncoder().encode(`${DRAW_ALGORITHM}$0`),
-    hexToBytes(args.randomness),
-    hexToBytes(args.snapshotHash),
-    new TextEncoder().encode(args.snapshot.giveawayId),
-    u64(BigInt(args.snapshot.drawOrdinal))
-  ));
-  const tree = new FenwickTree(weights);
-  const winners: string[] = [];
+async function randomBelow(
+  seed: Uint8Array,
+  winnerIndex: number,
+  maximum: bigint,
+): Promise<bigint> {
+  if (maximum <= 0n) throw new Error("Random bound must be positive.");
   const range = 1n << 256n;
-  for (let pick = 0; pick < picks; pick += 1) {
-    const total = tree.total();
-    const limit = range - (range % total);
-    let counter = 0n;
-    let random = 0n;
-    do {
-      const block = await sha256(concat(seed, u64(BigInt(pick)), u64(counter)));
-      random = BigInt(`0x${bytesToHex(block)}`);
-      counter += 1n;
-    } while (random >= limit);
-    const index = tree.findByTicket(random % total);
-    winners.push(candidates[index]!.userId);
-    tree.add(index, -weights[index]!);
+  const ceiling = range - (range % maximum);
+  for (let attempt = 0; ; attempt += 1) {
+    const digest = await sha256(concat(seed, u64(BigInt(winnerIndex)), u32(attempt)));
+    const value = BigInt(`0x${bytesToHex(digest)}`);
+    if (value < ceiling) return value % maximum;
+  }
+}
+
+export async function selectWeightedWinners<T extends ProofCandidate>(
+  candidates: T[],
+  winnerCount: number,
+  randomnessHex: string,
+  snapshotHash: string,
+  drawNumber: number,
+): Promise<T[]> {
+  if (!Number.isSafeInteger(winnerCount) || winnerCount < 0) {
+    throw new Error("Winner count must be a non-negative safe integer.");
+  }
+  if (!Number.isSafeInteger(drawNumber) || drawNumber <= 0) {
+    throw new Error("Draw number must be a positive safe integer.");
+  }
+  if (!/^[a-fA-F0-9]{64}$/.test(randomnessHex) || !/^[a-fA-F0-9]{64}$/.test(snapshotHash)) {
+    throw new Error("Randomness and snapshot hash must be 32-byte hexadecimal values.");
+  }
+  const pool = [...candidates].sort(compareCandidates);
+  pool.forEach(validateCandidate);
+  const seed = await sha256(
+    concat(
+      hexToBytes(randomnessHex),
+      hexToBytes(snapshotHash),
+      new TextEncoder().encode(drawNumber.toString()),
+    ),
+  );
+  const winners: T[] = [];
+  const count = Math.min(winnerCount, pool.length);
+  for (let selection = 0; selection < count; selection += 1) {
+    const total = pool.reduce((sum, candidate) => sum + BigInt(candidate.weight), 0n);
+    let target = await randomBelow(seed, selection, total);
+    let selectedIndex = 0;
+    for (let index = 0; index < pool.length; index += 1) {
+      const weight = BigInt(pool[index]!.weight);
+      if (target < weight) {
+        selectedIndex = index;
+        break;
+      }
+      target -= weight;
+    }
+    winners.push(pool[selectedIndex]!);
+    pool.splice(selectedIndex, 1);
   }
   return winners;
 }

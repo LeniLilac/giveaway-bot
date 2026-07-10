@@ -4,7 +4,7 @@
 
 | Service | Responsibility | Public network |
 |---|---|---|
-| bot | Discord gateway, slash commands, draft choices, consent, joins, leaves | No |
+| bot | Discord gateway, slash commands, draft choices, joins, and leaves | No |
 | worker | Scheduled lifecycle, Discord REST writes, eligibility snapshots, drand draws, prize roles | No |
 | web | Landing page, public evidence, OAuth dashboard, audited action enqueueing | Through Caddy |
 | migrate | Applies forward-only SQL migrations and exits | No |

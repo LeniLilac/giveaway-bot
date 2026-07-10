@@ -1,10 +1,10 @@
 import type { BonusRole } from "./types.js";
 
-const ROLE = /<@&($d{17,20})>|($d{17,20})/g;
-const BONUS = /(?:<@&($d{17,20})>|($d{17,20}))$s*[:=]$s*($d+)/g;
+const ROLE = /<@&(\d{15,22})>|(\d{15,22})/g;
+const BONUS = /(?:<@&(\d{15,22})>|(\d{15,22}))\s*(?::|=|\+)\s*(\d+)/g;
 
 function validSeparator(value: string): boolean {
-  return value.replace(/[$s,]+/g, "") === "";
+  return value.replace(/[\s,]+/g, "") === "";
 }
 
 export function parseRoleList(value: string | null | undefined): string[] {

@@ -162,6 +162,9 @@ export default async function PublicGiveawayPage({
                     >
                       Fetch this beacon from drand
                     </a>
+                    <a href={`https://api.drand.sh/${latestDraw.drandChainHash}/info`}>
+                      Inspect the pinned Quicknet chain
+                    </a>
                   </aside>
                 </div>
               ) : (

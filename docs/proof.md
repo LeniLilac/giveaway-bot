@@ -1,6 +1,7 @@
 # Public draw proof, `lilac-weighted-v1`
 
 This document is normative for proof version `lilac-weighted-v1`.
+The portable implementation in `packages/proof` is the single selection implementation used by the worker.
 
 ## 1. Eligibility snapshot
 

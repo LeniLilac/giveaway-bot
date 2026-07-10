@@ -21,23 +21,23 @@ describe("public draw selection", () => {
     ]);
   });
 
-  it("is deterministic and selects without replacement", () => {
-    const snapshot = candidateHash(candidates);
+  it("is deterministic and selects without replacement", async () => {
+    const snapshot = await candidateHash(candidates);
     const randomness = "11".repeat(32);
-    const first = selectWeightedWinners(candidates, 3, randomness, snapshot, 1);
-    const second = selectWeightedWinners(candidates, 3, randomness, snapshot, 1);
+    const first = await selectWeightedWinners(candidates, 3, randomness, snapshot, 1);
+    const second = await selectWeightedWinners(candidates, 3, randomness, snapshot, 1);
     expect(first.map((winner) => winner.userId)).toEqual(
       second.map((winner) => winner.userId),
     );
     expect(new Set(first.map((winner) => winner.userId)).size).toBe(3);
   });
 
-  it("caps winners at the candidate count", () => {
-    const winners = selectWeightedWinners(
+  it("caps winners at the candidate count", async () => {
+    const winners = await selectWeightedWinners(
       candidates,
       10,
       "22".repeat(32),
-      candidateHash(candidates),
+      await candidateHash(candidates),
       1,
     );
     expect(winners).toHaveLength(3);

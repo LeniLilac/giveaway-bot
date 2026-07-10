@@ -415,6 +415,20 @@ export async function persistWinners(
          jsonb_build_object('drawId', $4::text, 'winnerCount', $5::int))`,
       [randomUUID(), giveaway.guildId, giveaway.id, draw.id, winners.length],
     );
+    await client.query(
+      `INSERT INTO audit_events
+       (id, guild_id, giveaway_id, action, source, metadata)
+       VALUES ($1, $2, $3, $4, 'worker',
+         jsonb_build_object('drawId', $5::text, 'drawNumber', $6::int))`,
+      [
+        randomUUID(),
+        giveaway.guildId,
+        giveaway.id,
+        draw.drawNumber === 1 ? "ended" : "rerolled",
+        draw.id,
+        draw.drawNumber,
+      ],
+    );
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");

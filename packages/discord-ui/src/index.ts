@@ -3,6 +3,7 @@ export const COMPONENTS_V2_FLAG = 1 << 15;
 const ComponentType = {
   ActionRow: 1,
   Button: 2,
+  Section: 9,
   TextDisplay: 10,
   Separator: 14,
   Container: 17,
@@ -69,6 +70,10 @@ function row(...components: ApiComponent[]): ApiComponent {
   return { type: ComponentType.ActionRow, components };
 }
 
+function section(content: string, accessory: ApiComponent): ApiComponent {
+  return { type: ComponentType.Section, components: [text(content)], accessory };
+}
+
 function container(components: ApiComponent[], accentColor = 0x5865f2): ApiComponent {
   return { type: ComponentType.Container, accent_color: accentColor, components };
 }
@@ -85,10 +90,11 @@ function bonusLines(bonusRoles: BonusRole[]): string {
 
 export function giveawayComponents(giveaway: GiveawayView): ApiComponent[] {
   const host = giveaway.hostUserId ?? giveaway.creatorUserId;
-  const ended = giveaway.status === "ended";
-  const endingLabel = ended ? "Ended at" : "Ends at";
+  const closed = giveaway.status === "ending" || giveaway.status === "ended";
+  const interactive = giveaway.status === "active";
+  const endingLabel = closed ? "Ended at" : "Ends at";
   const endingTime = Math.floor(
-    (ended ? giveaway.endedAt ?? giveaway.endsAt : giveaway.endsAt).getTime() / 1000,
+    (closed ? giveaway.endedAt ?? giveaway.endsAt : giveaway.endsAt).getTime() / 1000,
   );
   const main = [
     `### ${giveaway.prize}`,
@@ -120,11 +126,11 @@ export function giveawayComponents(giveaway: GiveawayView): ApiComponent[] {
   }
   parts.push(
     row(
-      button("Join giveaway", ButtonStyle.Success, `giveaway:join:${giveaway.id}`, undefined, ended),
-      button("Leave giveaway", ButtonStyle.Secondary, `giveaway:leave:${giveaway.id}`, undefined, ended),
+      button("Join giveaway", ButtonStyle.Success, `giveaway:join:${giveaway.id}`, undefined, !interactive),
+      button("Leave giveaway", ButtonStyle.Secondary, `giveaway:leave:${giveaway.id}`, undefined, !interactive),
     ),
   );
-  return [container(parts, ended ? 0x747f8d : 0x5865f2)];
+  return [container(parts, closed ? 0x747f8d : 0x5865f2)];
 }
 
 export function requirementDecisionComponents(
@@ -177,39 +183,19 @@ export function draftReadyComponents(draftId: string): ApiComponent[] {
   ];
 }
 
-export function consentComponents(giveawayId: string): ApiComponent[] {
-  return [
-    container(
-      [
-        text("### Privacy confirmation"),
-        text(
-          "Entering stores your Discord user ID, current username, avatar hash, and join/leave history so the draw can be audited publicly. You can request deletion from the website.",
-        ),
-        row(
-          button("I agree and want to enter", ButtonStyle.Success, `consent:accept:${giveawayId}`),
-          button("Cancel", ButtonStyle.Secondary, `consent:cancel:${giveawayId}`),
-        ),
-      ],
-      0x5865f2,
-    ),
-  ];
-}
-
 export function winnerComponents(
   giveaway: GiveawayView,
   winnerIds: string[],
   messageUrl: string,
   websiteUrl: string,
 ): ApiComponent[] {
-  const noun = winnerIds.length === 1 ? "winner is" : "winners are";
-  const winnerText =
-    winnerIds.length <= 1000
-      ? winnerIds.map((id) => `<@${id}>`).join(" ")
-      : `${winnerIds.length} winners are listed on the website.`;
+  const winnerText = winnerIds.length > 1000
+    ? `🏆 **${winnerIds.length.toLocaleString()} winners** were selected for **${giveaway.prize}**. The complete user ID list is available on the website.`
+    : `🏆 The ${winnerIds.length === 1 ? "winner is" : "winners are"} ${winnerIds.map((id) => `<@${id}>`).join(" ")}, you won **${giveaway.prize}**.`;
   return [
     container(
       [
-        text(`### Giveaway complete\n🏆 The ${noun} ${winnerText}, you won **${giveaway.prize}**.`),
+        text(`### Giveaway complete\n${winnerText}`),
         row(
           button("View giveaway message", ButtonStyle.Link, undefined, messageUrl),
           button("View proof and winners", ButtonStyle.Link, undefined, websiteUrl),
@@ -240,38 +226,60 @@ export function proofPendingComponents(
   ];
 }
 
+export interface GiveawayPickerPagination {
+  page: number;
+  pageAction: "start" | "queue" | "list";
+  hasPrevious: boolean;
+  hasNext: boolean;
+}
+
 export function giveawayPickerComponents(
   title: string,
   giveaways: GiveawayView[],
   action: "start" | "end" | "reroll" | "delete" | "view",
   websiteBaseUrl: string,
+  pagination: GiveawayPickerPagination,
 ): ApiComponent[] {
+  const components: ApiComponent[] = [
+    text(`### ${title}\nPage **${pagination.page + 1}**`),
+  ];
   if (giveaways.length === 0) {
-    return [container([text(`### ${title}\nNo giveaways found.`)], 0x747f8d)];
+    components.push(text("No giveaways found on this page."));
   }
-
-  const components: ApiComponent[] = [text(`### ${title}`)];
-  for (const giveaway of giveaways.slice(0, 20)) {
+  for (const giveaway of giveaways.slice(0, 10)) {
     const details = [
       `**${giveaway.prize}**`,
       `${giveaway.status} • <t:${Math.floor(giveaway.scheduledStartAt.getTime() / 1000)}:R>`,
       `${giveaway.participantCount} participants`,
-    ].join("\n");
-    components.push(
-      separator(),
-      text(details),
-      row(
-        action === "view"
-          ? button("Open details", ButtonStyle.Link, undefined, `${websiteBaseUrl}/g/${giveaway.id}`)
-          : button(
-              action[0]!.toUpperCase() + action.slice(1),
-              action === "delete" ? ButtonStyle.Danger : ButtonStyle.Primary,
-              `giveaway:action:${action}:${giveaway.id}`,
-            ),
-        button("Website", ButtonStyle.Link, undefined, `${websiteBaseUrl}/g/${giveaway.id}`),
-      ),
-    );
+      action === "view" ? null : `[Website](${websiteBaseUrl}/g/${giveaway.id})`,
+    ].filter((value): value is string => value !== null).join("\n");
+    const accessory = action === "view"
+      ? button("Open", ButtonStyle.Link, undefined, `${websiteBaseUrl}/g/${giveaway.id}`)
+      : button(
+          action[0]!.toUpperCase() + action.slice(1),
+          action === "delete" ? ButtonStyle.Danger : ButtonStyle.Primary,
+          `giveaway:action:${action}:${giveaway.id}`,
+        );
+    components.push(section(details, accessory));
   }
+  components.push(
+    row(
+      button(
+        "Previous",
+        ButtonStyle.Secondary,
+        `giveaway:page:${pagination.pageAction}:${Math.max(0, pagination.page - 1)}`,
+        undefined,
+        !pagination.hasPrevious,
+      ),
+      button(
+        "Next",
+        ButtonStyle.Secondary,
+        `giveaway:page:${pagination.pageAction}:${pagination.page + 1}`,
+        undefined,
+        !pagination.hasNext,
+      ),
+    ),
+  );
   return [container(components, 0x5865f2)];
 }
 

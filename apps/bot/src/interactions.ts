@@ -12,7 +12,6 @@ import type { Pool } from "pg";
 import type pino from "pino";
 import {
   COMPONENTS_V2_FLAG,
-  consentComponents,
   draftReadyComponents,
   giveawayPickerComponents,
   requirementDecisionComponents,
@@ -28,19 +27,19 @@ import {
   getAllowedRoleIds,
   getDraft,
   getGiveaway,
-  hasConsent,
   joinGiveaway,
   leaveGiveaway,
   listGiveaways,
-  recordConsent,
   updateDraftDecision,
   type DraftPayload,
   type GiveawayRecord,
 } from "./repository.js";
 
-const PRIVACY_POLICY_VERSION = "2026-07-10";
 const EPHEMERAL_COMPONENT_FLAGS = MessageFlags.Ephemeral | COMPONENTS_V2_FLAG;
 const DISCORD_EPOCH = 1_420_070_400_000n;
+const PICKER_PAGE_SIZE = 10;
+
+type PickerKind = "start" | "queue" | "list";
 
 interface InteractionDependencies {
   client: Client;
@@ -98,6 +97,44 @@ async function assertAuthorized(
 
 function asView(giveaway: GiveawayRecord): never {
   return giveaway as never;
+}
+
+async function buildPicker(
+  dependencies: InteractionDependencies,
+  guildId: string,
+  userId: string,
+  kind: PickerKind,
+  requestedPage: number,
+): Promise<never> {
+  const page = Math.max(0, Math.floor(requestedPage));
+  const statuses: GiveawayRecord["status"][] =
+    kind === "queue" || kind === "start"
+      ? ["queued"]
+      : ["active", "starting", "ending"];
+  const records = await listGiveaways(
+    dependencies.pool,
+    guildId,
+    statuses,
+    kind === "start" ? userId : undefined,
+    PICKER_PAGE_SIZE + 1,
+    page * PICKER_PAGE_SIZE,
+  );
+  return giveawayPickerComponents(
+    kind === "start"
+      ? "Your queued giveaways"
+      : kind === "queue"
+        ? "Queued giveaways"
+        : "Active giveaways",
+    records.slice(0, PICKER_PAGE_SIZE).map(asView),
+    kind === "start" ? "start" : "view",
+    dependencies.websiteUrl,
+    {
+      page,
+      pageAction: kind,
+      hasPrevious: page > 0,
+      hasNext: records.length > PICKER_PAGE_SIZE,
+    },
+  ) as never;
 }
 
 async function replyNotice(
@@ -384,6 +421,28 @@ async function handleGiveawayButton(
   parts: string[],
 ): Promise<void> {
   const action = parts[1]!;
+  if (action === "page") {
+    const kind = parts[2] as PickerKind;
+    const page = Number(parts[3]);
+    if (!["start", "queue", "list"].includes(kind)) {
+      throw new Error("Unknown giveaway picker.");
+    }
+    if (!Number.isSafeInteger(page) || page < 0 || page > 100) {
+      throw new Error("Invalid giveaway page.");
+    }
+    if (!interaction.guildId) throw new Error("This picker requires a server.");
+    await assertAuthorized(interaction, dependencies.pool, kind);
+    await interaction.update({
+      components: await buildPicker(
+        dependencies,
+        interaction.guildId,
+        interaction.user.id,
+        kind,
+        page,
+      ),
+    });
+    return;
+  }
   if (action === "action") {
     const command = parts[2] as "start" | "end" | "reroll" | "delete";
     const giveawayId = parts[3]!;
@@ -414,19 +473,6 @@ async function handleGiveawayButton(
   const giveaway = await getGiveaway(dependencies.pool, giveawayId, interaction.guildId ?? undefined);
   if (!giveaway) throw new Error("Giveaway not found.");
   if (action === "join") {
-    const consented = await hasConsent(
-      dependencies.pool,
-      giveaway.guildId,
-      interaction.user.id,
-      PRIVACY_POLICY_VERSION,
-    );
-    if (!consented) {
-      await interaction.reply({
-        components: consentComponents(giveaway.id) as never,
-        flags: EPHEMERAL_COMPONENT_FLAGS,
-      });
-      return;
-    }
     await performJoin(interaction, dependencies, giveaway);
     return;
   }
@@ -444,34 +490,6 @@ async function handleGiveawayButton(
   }
 }
 
-async function handleConsentButton(
-  interaction: ButtonInteraction,
-  dependencies: InteractionDependencies,
-  parts: string[],
-): Promise<void> {
-  const action = parts[1]!;
-  const giveawayId = parts[2]!;
-  if (action === "cancel") {
-    await interaction.update({
-      components: simpleNotice("Entry cancelled", "No data was stored.", "warning") as never,
-    });
-    return;
-  }
-  const giveaway = await getGiveaway(
-    dependencies.pool,
-    giveawayId,
-    interaction.guildId ?? undefined,
-  );
-  if (!giveaway || !interaction.guildId) throw new Error("Giveaway not found.");
-  await recordConsent(
-    dependencies.pool,
-    interaction.guildId,
-    interaction.user.id,
-    PRIVACY_POLICY_VERSION,
-  );
-  await performJoin(interaction, dependencies, giveaway);
-}
-
 async function handleManagementCommand(
   interaction: ChatInputCommandInteraction,
   dependencies: InteractionDependencies,
@@ -484,19 +502,14 @@ async function handleManagementCommand(
       ? interaction.options.getString("giveaway")
       : interaction.options.getString("message_id", true);
   if (!supplied && command === "start") {
-    const queued = await listGiveaways(
-      dependencies.pool,
-      interaction.guildId,
-      ["queued"],
-      interaction.user.id,
-    );
     await interaction.reply({
-      components: giveawayPickerComponents(
-        "Your queued giveaways",
-        queued.map(asView),
+      components: await buildPicker(
+        dependencies,
+        interaction.guildId,
+        interaction.user.id,
         "start",
-        dependencies.websiteUrl,
-      ) as never,
+        0,
+      ),
       flags: EPHEMERAL_COMPONENT_FLAGS,
     });
     return;
@@ -538,18 +551,14 @@ async function handleListCommand(
 ): Promise<void> {
   await assertAuthorized(interaction, dependencies.pool, kind);
   if (!interaction.guildId) throw new Error("This command requires a server.");
-  const giveaways = await listGiveaways(
-    dependencies.pool,
-    interaction.guildId,
-    kind === "queue" ? ["queued"] : ["active", "starting", "ending"],
-  );
   await interaction.reply({
-    components: giveawayPickerComponents(
-      kind === "queue" ? "Queued giveaways" : "Active giveaways",
-      giveaways.map(asView),
-      "view",
-      dependencies.websiteUrl,
-    ) as never,
+    components: await buildPicker(
+      dependencies,
+      interaction.guildId,
+      interaction.user.id,
+      kind,
+      0,
+    ),
     flags: EPHEMERAL_COMPONENT_FLAGS,
   });
 }
@@ -588,8 +597,6 @@ export async function handleButton(
       await handleDraftButton(interaction, dependencies, parts);
     } else if (parts[0] === "giveaway") {
       await handleGiveawayButton(interaction, dependencies, parts);
-    } else if (parts[0] === "consent") {
-      await handleConsentButton(interaction, dependencies, parts);
     }
   } catch (error) {
     dependencies.logger.warn({ error, userId: interaction.user.id }, "button failed");

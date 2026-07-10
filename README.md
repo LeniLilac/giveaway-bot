@@ -13,7 +13,7 @@ Lilac is a Discord giveaway bot and public dashboard. It freezes the eligible pa
 - Discord OAuth dashboard for personal entries, created giveaways, server operations, and command-role settings
 - PostgreSQL-native worker queue with retry and idempotency controls
 - Prize-role ownership tracking across rerolls
-- Privacy consent and pseudonymizing deletion workflow
+- Public privacy/terms disclosures and pseudonymizing deletion workflow
 
 ## Repository
 
@@ -62,7 +62,7 @@ Apply migrations and register development commands:
 ```powershell
 doppler run -- npm run migrate
 $env:DISCORD_DEV_GUILD_ID="your_server_id"
-doppler run -- npm run deploy-commands -w @giveaway/bot
+doppler run -- npm run deploy-commands -w @lilac/bot
 ```
 
 Start bot, worker, and web processes:

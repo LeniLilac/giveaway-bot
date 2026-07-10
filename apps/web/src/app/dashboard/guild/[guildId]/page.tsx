@@ -51,7 +51,7 @@ export default async function GuildDashboardPage({
         <div className="section-heading">
           <div>
             <h2>Giveaways</h2>
-            <p>Recent server activity, newest first.</p>
+            <p>Every active or queued giveaway, followed by the 250 most recent completed records.</p>
           </div>
           <span className="count-label">{dashboard.giveaways.length}</span>
         </div>

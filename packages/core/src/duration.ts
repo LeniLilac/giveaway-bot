@@ -22,13 +22,13 @@ function dateFromUnix(seconds: bigint): Date {
 
 export function parseTimeInput(value: string): ParsedTime {
   const trimmed = value.trim();
-  if (/^$d{9,12}$/.test(trimmed)) {
+  if (/^\d{10}$/.test(trimmed)) {
     const unixSeconds = BigInt(trimmed);
     return { kind: "absolute", unixSeconds, date: dateFromUnix(unixSeconds) };
   }
-  const compact = trimmed.replace(/[$s,]+/g, "");
+  const compact = trimmed.replace(/[\s,]+/g, "");
   if (!compact) throw new Error("A time value is required.");
-  const token = /($d+)(mo|s|m|h|d|w|y)/gy;
+  const token = /(\d+)(mo|s|m|h|d|w|y)/gy;
   let offset = 0;
   let total = 0n;
   while (offset < compact.length) {

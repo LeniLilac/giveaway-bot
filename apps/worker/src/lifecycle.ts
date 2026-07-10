@@ -210,7 +210,7 @@ async function prepareDraw(
   const exclusions = eligibility.flatMap((result) =>
     result.exclusion ? [result.exclusion] : [],
   );
-  const snapshot = candidateHash(candidates);
+  const snapshot = await candidateHash(candidates);
   const info = await chainInfo(dependencies);
   const target = Math.ceil(Date.now() / 1000) + 15;
   const round = roundAtOrAfter(info, target);
@@ -339,7 +339,7 @@ async function completeDraw(
   if (!giveaway || giveaway.status === "deleted") return;
   const candidates = await getDrawCandidates(dependencies.pool, draw.id);
   const beacon = await fetchBeacon(dependencies.drand, draw.drandRound);
-  const winners = selectWeightedWinners(
+  const winners = await selectWeightedWinners(
     candidates,
     giveaway.winnerCount,
     beacon.randomness,

@@ -268,27 +268,40 @@ function mapDashboardGiveaway(row: Record<string, unknown>): DashboardGiveaway {
   };
 }
 
-export async function getUserDashboard(userId: string): Promise<{
+export async function getUserDashboard(
+  userId: string,
+  createdPage = 1,
+  joinedPage = 1,
+  pageSize = 50,
+): Promise<{
   created: DashboardGiveaway[];
   joined: DashboardGiveaway[];
+  createdTotal: number;
+  joinedTotal: number;
 }> {
-  const [created, joined] = await Promise.all([
+  const createdOffset = Math.max(0, createdPage - 1) * pageSize;
+  const joinedOffset = Math.max(0, joinedPage - 1) * pageSize;
+  const [created, joined, createdCount, joinedCount] = await Promise.all([
     db.query(
       `SELECT * FROM giveaways WHERE creator_user_id = $1
-       ORDER BY created_at DESC LIMIT 100`,
-      [userId],
+       ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+      [userId, pageSize, createdOffset],
     ),
     db.query(
       `SELECT g.* FROM giveaways g
        JOIN entries e ON e.giveaway_id = g.id
        WHERE e.user_id = $1
-       ORDER BY e.joined_at DESC LIMIT 100`,
-      [userId],
+       ORDER BY e.joined_at DESC LIMIT $2 OFFSET $3`,
+      [userId, pageSize, joinedOffset],
     ),
+    db.query("SELECT count(*)::int AS count FROM giveaways WHERE creator_user_id = $1", [userId]),
+    db.query("SELECT count(*)::int AS count FROM entries WHERE user_id = $1", [userId]),
   ]);
   return {
     created: created.rows.map(mapDashboardGiveaway),
     joined: joined.rows.map(mapDashboardGiveaway),
+    createdTotal: Number(createdCount.rows[0]!.count),
+    joinedTotal: Number(joinedCount.rows[0]!.count),
   };
 }
 
@@ -297,9 +310,16 @@ export async function getGuildDashboard(guildId: string): Promise<{
   commandRoles: Record<string, string[]>;
   audit: AuditEvent[];
 }> {
-  const [giveaways, roles, audit] = await Promise.all([
+  const [liveGiveaways, history, roles, audit] = await Promise.all([
     db.query(
-      `SELECT * FROM giveaways WHERE guild_id = $1
+      `SELECT * FROM giveaways
+       WHERE guild_id = $1 AND status IN ('queued', 'starting', 'active', 'ending')
+       ORDER BY scheduled_start_at ASC LIMIT 1000`,
+      [guildId],
+    ),
+    db.query(
+      `SELECT * FROM giveaways
+       WHERE guild_id = $1 AND status NOT IN ('queued', 'starting', 'active', 'ending')
        ORDER BY created_at DESC LIMIT 250`,
       [guildId],
     ),
@@ -321,7 +341,7 @@ export async function getGuildDashboard(guildId: string): Promise<{
     commandRoles[command]!.push(row.role_id as string);
   }
   return {
-    giveaways: giveaways.rows.map(mapDashboardGiveaway),
+    giveaways: [...liveGiveaways.rows, ...history.rows].map(mapDashboardGiveaway),
     commandRoles,
     audit: audit.rows.map((row) => ({
       id: row.id as string,
@@ -331,5 +351,39 @@ export async function getGuildDashboard(guildId: string): Promise<{
       metadata: (row.metadata as Record<string, unknown>) ?? {},
       occurredAt: new Date(row.occurred_at as string),
     })),
+  };
+}
+
+export interface PublicStats {
+  servers: number;
+  giveaways: number;
+  liveGiveaways: number;
+  completedGiveaways: number;
+  entryRecords: number;
+  completedDraws: number;
+  winners: number;
+}
+
+export async function getPublicStats(): Promise<PublicStats> {
+  const result = await db.query(
+    `SELECT
+       (SELECT count(DISTINCT guild_id) FROM giveaways)::bigint AS servers,
+       (SELECT count(*) FROM giveaways)::bigint AS giveaways,
+       (SELECT count(*) FROM giveaways
+        WHERE status IN ('queued', 'starting', 'active', 'ending'))::bigint AS live_giveaways,
+       (SELECT count(*) FROM giveaways WHERE status = 'ended')::bigint AS completed_giveaways,
+       (SELECT count(*) FROM entries)::bigint AS entry_records,
+       (SELECT count(*) FROM draws WHERE status = 'complete')::bigint AS completed_draws,
+       (SELECT count(*) FROM draw_winners)::bigint AS winners`,
+  );
+  const row = result.rows[0]!;
+  return {
+    servers: Number(row.servers),
+    giveaways: Number(row.giveaways),
+    liveGiveaways: Number(row.live_giveaways),
+    completedGiveaways: Number(row.completed_giveaways),
+    entryRecords: Number(row.entry_records),
+    completedDraws: Number(row.completed_draws),
+    winners: Number(row.winners),
   };
 }

@@ -23,6 +23,7 @@ export function SiteHeader({ session }: { session: SessionUser | null }): React.
       </Link>
       <nav aria-label="Primary navigation">
         <Link href="/#proof">How proof works</Link>
+        <Link href="/stats">Stats</Link>
         <Link href="/support">Support</Link>
         {session ? (
           <Link className="button button-small" href="/dashboard">
