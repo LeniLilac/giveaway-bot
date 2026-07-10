@@ -303,7 +303,7 @@ export async function createDrawCommitment(
       `INSERT INTO audit_events
        (id, guild_id, giveaway_id, actor_user_id, action, source, metadata)
        VALUES ($1, $2, $3, $4, 'draw_committed', 'worker',
-               jsonb_build_object('drawId', $5::text, 'candidateHash', $6, 'drandRound', $7::text))`,
+               jsonb_build_object('drawId', $5::text, 'candidateHash', $6::text, 'drandRound', $7::text))`,
       [
         randomUUID(),
         input.giveaway.guildId,
