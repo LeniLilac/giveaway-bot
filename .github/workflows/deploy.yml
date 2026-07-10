@@ -1,0 +1,45 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: giveaway-bot-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+    steps:
+      - name: Configure SSH
+        shell: bash
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/giveaway_bot
+          chmod 0600 ~/.ssh/giveaway_bot
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+      - name: Deploy production
+        shell: bash
+        run: |
+          TOKEN_B64="$(printf '%s' "$DOPPLER_TOKEN" | base64 -w 0)"
+          ssh -i ~/.ssh/giveaway_bot "$VPS_USER@$VPS_HOST" \
+            "export DOPPLER_TOKEN=\$(printf '%s' '$TOKEN_B64' | base64 -d); \
+             export GITHUB_REPOSITORY='LeniLilac/giveaway-bot'; \
+             if [ ! -d /opt/giveaway-bot/.git ]; then \
+               git clone https://github.com/LeniLilac/giveaway-bot.git /opt/giveaway-bot; \
+             fi; \
+             bash /opt/giveaway-bot/ops/deploy.sh"

@@ -1,0 +1,10 @@
+giveaway.leni.cat {
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+
+	encode zstd gzip
+	reverse_proxy giveaway-bot-web:3000
+}

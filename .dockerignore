@@ -1,0 +1,12 @@
+.git
+.github
+.local
+node_modules
+**/dist
+**/.next
+coverage
+.env
+.env.*
+!.env.example
+backups
+*.log

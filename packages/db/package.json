@@ -1,0 +1,18 @@
+{
+  "name": "@lilac/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@lilac/core": "*",
+    "pg": "8.22.0",
+    "uuid": "14.0.1"
+  },
+  "devDependencies": { "@types/pg": "^8.15.0" }
+}

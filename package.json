@@ -1,0 +1,32 @@
+{
+  "name": "giveaway-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "engines": { "node": ">=24 <25" },
+  "scripts": {
+    "build:packages": "npm run build -w @lilac/config && npm run build -w @lilac/core && npm run build -w @lilac/proof && npm run build -w @lilac/db && npm run build -w @lilac/discord-ui",
+    "build": "npm run build:packages && npm run build -w @lilac/bot && npm run build -w @lilac/worker && npm run build -w @lilac/web",
+    "typecheck": "npm run build:packages && npm run typecheck -w @lilac/bot && npm run typecheck -w @lilac/worker && npm run typecheck -w @lilac/web",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "start:bot": "node apps/bot/dist/index.js",
+    "start:worker": "node apps/worker/dist/index.js",
+    "start:web": "npm run start -w @lilac/web",
+    "dev:bot": "tsx watch apps/bot/src/index.ts",
+    "dev:worker": "tsx watch apps/worker/src/index.ts",
+    "dev:web": "npm run dev -w @lilac/web",
+    "deploy-commands": "node apps/bot/dist/deploy-commands.js",
+    "db:migrate": "node packages/db/dist/migrate.js"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "eslint": "10.6.0",
+    "eslint-config-next": "16.2.10",
+    "tsx": "4.23.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}

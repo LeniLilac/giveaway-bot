@@ -1,0 +1,36 @@
+FROM node:24-bookworm-slim AS workspace
+
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+
+COPY package.json package-lock.json ./
+COPY apps/bot/package.json apps/bot/package.json
+COPY apps/worker/package.json apps/worker/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/config/package.json packages/config/package.json
+COPY packages/core/package.json packages/core/package.json
+COPY packages/db/package.json packages/db/package.json
+COPY packages/discord-ui/package.json packages/discord-ui/package.json
+COPY packages/proof/package.json packages/proof/package.json
+RUN npm ci
+
+COPY . .
+
+FROM workspace AS bot
+ENV NODE_ENV=production
+CMD ["npm", "run", "start", "-w", "@giveaway/bot"]
+
+FROM workspace AS worker
+ENV NODE_ENV=production
+CMD ["npm", "run", "start", "-w", "@giveaway/worker"]
+
+FROM workspace AS migrate
+ENV NODE_ENV=production
+CMD ["npm", "run", "migrate", "-w", "@giveaway/db"]
+
+FROM workspace AS web-build
+RUN npm run build -w @giveaway/web
+
+FROM web-build AS web
+ENV NODE_ENV=production
+CMD ["npm", "run", "start", "-w", "@giveaway/web"]
