@@ -370,11 +370,17 @@ export async function joinGiveaway(
   try {
     await client.query("BEGIN");
     const giveawayResult = await client.query(
-      "SELECT guild_id, status FROM giveaways WHERE id = $1 FOR UPDATE",
+      "SELECT guild_id, status, ends_at FROM giveaways WHERE id = $1 FOR UPDATE",
       [giveawayId],
     );
     const giveaway = giveawayResult.rows[0];
-    if (!giveaway || giveaway.status !== "active") throw new Error("This giveaway is not active.");
+    if (
+      !giveaway ||
+      giveaway.status !== "active" ||
+      (giveaway.ends_at && new Date(giveaway.ends_at as string) <= new Date())
+    ) {
+      throw new Error("This giveaway is not active.");
+    }
     const existing = await client.query(
       "SELECT left_at FROM entries WHERE giveaway_id = $1 AND user_id = $2",
       [giveawayId, user.id],

@@ -296,7 +296,7 @@ export async function createDrawCommitment(
     await client.query(
       `INSERT INTO jobs (id, type, giveaway_id, payload, run_at, idempotency_key)
        VALUES ($1, 'complete_draw', $2, jsonb_build_object('drawId', $3::text),
-               $4 + interval '2 seconds', $5)`,
+               $4::timestamptz + interval '2 seconds', $5)`,
       [randomUUID(), input.giveaway.id, drawId, input.beaconTime, `draw:${drawId}`],
     );
     await client.query(

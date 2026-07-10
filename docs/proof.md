@@ -11,7 +11,8 @@ At giveaway end, active entries are evaluated again:
 2. Bot accounts are excluded.
 3. Required roles use the recorded `all` or `one` mode.
 4. On a reroll, every winner from every prior completed draw is excluded.
-5. Weight equals one plus every matching role bonus.
+5. Entries joined after the persisted closure timestamp are excluded.
+6. Weight equals one plus every matching role bonus.
 
 Message-count requirements are admission requirements and are checked when joining. Role requirements are checked both at admission and draw time.
 

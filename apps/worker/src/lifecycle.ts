@@ -179,7 +179,7 @@ async function prepareDraw(
   reroll: boolean,
 ): Promise<void> {
   const { pool, discord } = dependencies;
-  const giveaway = await getGiveaway(pool, giveawayId);
+  let giveaway = await getGiveaway(pool, giveawayId);
   if (!giveaway || giveaway.status === "deleted") return;
   if (reroll && giveaway.status !== "ended") {
     throw new Error("Only ended giveaways can be rerolled.");
@@ -196,11 +196,24 @@ async function prepareDraw(
       [giveaway.id],
     );
     if (pending.rows[0]) return;
+    await pool.query(
+      `UPDATE giveaways
+       SET status = 'ending',
+           ended_at = COALESCE(ended_at, LEAST(now(), ends_at)),
+           updated_at = now()
+       WHERE id = $1 AND status IN ('active', 'ending')`,
+      [giveaway.id],
+    );
+    giveaway = await getGiveaway(pool, giveaway.id);
+    if (!giveaway) return;
   }
 
   const entries = await getActiveEntries(pool, giveaway.id);
   const priorWinners = reroll ? await previousWinnerIds(pool, giveaway.id) : new Set<string>();
   const eligibility = await mapConcurrent(entries, 8, async (entry) => {
+    if (giveaway.endedAt && entry.joinedAt > giveaway.endedAt) {
+      return { exclusion: { userId: entry.userId, reason: "joined_after_end" } };
+    }
     const member = await discord.getMember(giveaway.guildId, entry.userId);
     return evaluateMember(giveaway, entry, member, priorWinners);
   });
