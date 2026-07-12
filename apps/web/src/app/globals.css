@@ -965,6 +965,59 @@ td > code {
   display: inline-flex;
 }
 
+.reroll-action {
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.reroll-action input {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font: inherit;
+  max-width: 92px;
+  min-height: 34px;
+  padding: 0.35rem 0.5rem;
+}
+
+.reroll-action input:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in oklch, var(--accent) 28%, transparent);
+  outline-offset: 1px;
+}
+
+.draw-selector {
+  border-block: 1px solid var(--line);
+  display: flex;
+  gap: 0.45rem;
+  margin: 0 0 2rem;
+  overflow-x: auto;
+  padding: 0.75rem 0;
+}
+
+.draw-selector a {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.72rem;
+  padding: 0.55rem 0.75rem;
+  text-decoration: none;
+}
+
+.draw-selector a:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.draw-selector a[aria-current="page"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
 .empty-state {
   align-items: center;
   background: color-mix(in oklch, var(--raised) 58%, var(--surface));

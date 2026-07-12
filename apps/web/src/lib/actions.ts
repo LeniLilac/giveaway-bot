@@ -8,6 +8,23 @@ import { db } from "./db";
 
 const COMMANDS = ["create", "start", "end", "reroll", "delete", "queue", "list"] as const;
 type Action = "start" | "end" | "reroll" | "delete";
+const MAX_REROLL_WINNERS = 2_147_483_647;
+
+function rerollWinnerCount(formData: FormData): number {
+  const raw = String(formData.get("winnerCount") ?? "").trim();
+  if (!/^\d+$/.test(raw)) throw new Error("A whole-number winner count is required.");
+  const count = Number(raw);
+  if (
+    !Number.isSafeInteger(count) ||
+    count < 1 ||
+    count > MAX_REROLL_WINNERS
+  ) {
+    throw new Error(
+      `Winner count must be between 1 and ${MAX_REROLL_WINNERS.toLocaleString()}.`,
+    );
+  }
+  return count;
+}
 
 async function userCanRun(
   userId: string,
@@ -70,23 +87,71 @@ export async function queueGiveawayAction(formData: FormData): Promise<void> {
   if (!valid[action].includes(giveaway.status as string)) {
     throw new Error(`This giveaway cannot be ${action}ed from its current status.`);
   }
-  await db.query(
-    `INSERT INTO jobs (id, type, giveaway_id, payload, run_at)
-     VALUES ($1, $2, $3, $4::jsonb, now())`,
-    [
-      randomUUID(),
-      `${action}_giveaway`,
-      giveawayId,
-      JSON.stringify({ actorUserId: session.id, source: "web" }),
-    ],
-  );
-  await db.query(
-    `INSERT INTO audit_events
-     (id, guild_id, giveaway_id, actor_user_id, action, source, metadata)
-     VALUES ($1, $2, $3, $4, 'action_queued', 'web',
-             jsonb_build_object('requestedAction', $5::text))`,
-    [randomUUID(), giveaway.guild_id, giveawayId, session.id, action],
-  );
+  const winnerCount = action === "reroll" ? rerollWinnerCount(formData) : undefined;
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    if (action === "reroll") {
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+        [giveawayId],
+      );
+    }
+    const locked = await client.query(
+      "SELECT status FROM giveaways WHERE id = $1 FOR UPDATE",
+      [giveawayId],
+    );
+    if (!valid[action].includes(locked.rows[0]?.status as string)) {
+      throw new Error(`This giveaway cannot be ${action}ed from its current status.`);
+    }
+    if (action === "reroll") {
+      const pending = await client.query(
+        `SELECT EXISTS (
+           SELECT 1 FROM draws
+           WHERE giveaway_id = $1 AND status IN ('awaiting_beacon', 'drawing')
+         ) OR EXISTS (
+           SELECT 1 FROM jobs
+           WHERE giveaway_id = $1 AND type = 'reroll_giveaway'
+             AND completed_at IS NULL
+         ) AS busy`,
+        [giveawayId],
+      );
+      if (pending.rows[0]?.busy) {
+        throw new Error("Another reroll is already queued or drawing.");
+      }
+    }
+    const payload = {
+      actorUserId: session.id,
+      source: "web",
+      ...(winnerCount === undefined ? {} : { winnerCount }),
+    };
+    await client.query(
+      `INSERT INTO jobs (id, type, giveaway_id, payload, run_at)
+       VALUES ($1, $2, $3, $4::jsonb, now())`,
+      [randomUUID(), `${action}_giveaway`, giveawayId, JSON.stringify(payload)],
+    );
+    await client.query(
+      `INSERT INTO audit_events
+       (id, guild_id, giveaway_id, actor_user_id, action, source, metadata)
+       VALUES ($1, $2, $3, $4, 'action_queued', 'web', $5::jsonb)`,
+      [
+        randomUUID(),
+        giveaway.guild_id,
+        giveawayId,
+        session.id,
+        JSON.stringify({
+          requestedAction: action,
+          ...(winnerCount === undefined ? {} : { winnerCount }),
+        }),
+      ],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
   revalidatePath("/dashboard");
   revalidatePath(`/dashboard/guild/${giveaway.guild_id as string}`);
   revalidatePath(`/g/${giveawayId}`);

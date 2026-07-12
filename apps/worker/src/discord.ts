@@ -106,6 +106,28 @@ export class DiscordApi {
     }
   }
 
+  async postRerollRejected(
+    giveaway: WorkerGiveaway,
+    requestedWinnerCount: number,
+    eligibleCandidateCount: number | null,
+    reason: "insufficient_eligible_candidates" | "draw_in_progress",
+  ): Promise<void> {
+    if (!giveaway.messageId) return;
+    const description =
+      reason === "draw_in_progress"
+        ? `Another draw is already in progress for **${giveaway.prize}**. Wait for it to complete before rerolling again.`
+        : `The reroll requested **${requestedWinnerCount.toLocaleString()}** fresh winners, but only **${(eligibleCandidateCount ?? 0).toLocaleString()}** eligible non-winners remained.`;
+    await this.replyComponents(
+      giveaway,
+      simpleNotice(
+        "Reroll not created",
+        `${description}\n[Inspect giveaway](${this.websiteUrl}/g/${giveaway.id})`,
+        "warning",
+      ),
+      [],
+    );
+  }
+
   private async replyComponents(
     giveaway: WorkerGiveaway,
     components: unknown[],

@@ -42,4 +42,16 @@ describe("public draw selection", () => {
     );
     expect(winners).toHaveLength(3);
   });
+
+  it("selects exactly the requested custom reroll count", async () => {
+    const winners = await selectWeightedWinners(
+      candidates,
+      2,
+      "33".repeat(32),
+      await candidateHash(candidates),
+      2,
+    );
+    expect(winners).toHaveLength(2);
+    expect(new Set(winners.map((winner) => winner.userId)).size).toBe(2);
+  });
 });

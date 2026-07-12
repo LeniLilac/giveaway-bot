@@ -2,7 +2,12 @@ import { Client, Events, GatewayIntentBits } from "discord.js";
 import { Pool } from "pg";
 import pino from "pino";
 import { startHealthServer } from "@lilac/core";
-import { handleAutocomplete, handleButton, handleChatInput } from "./interactions.js";
+import {
+  handleAutocomplete,
+  handleButton,
+  handleChatInput,
+  handleModalSubmit,
+} from "./interactions.js";
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -30,6 +35,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await handleChatInput(interaction, dependencies);
   } else if (interaction.isButton()) {
     await handleButton(interaction, dependencies);
+  } else if (interaction.isModalSubmit()) {
+    await handleModalSubmit(interaction, dependencies);
   } else if (interaction.isAutocomplete()) {
     await handleAutocomplete(interaction, dependencies);
   }

@@ -23,6 +23,13 @@ import {
   type DrandClientOptions,
 } from "./drand.js";
 import { candidateHash, selectWeightedWinners, type Candidate } from "./selection.js";
+import {
+  canFulfillReroll,
+  countExclusionReasons,
+  type RerollExclusion,
+} from "./reroll-policy.js";
+
+const MAX_REROLL_WINNERS = 2_147_483_647;
 
 interface LifecycleDependencies {
   pool: Pool;
@@ -172,15 +179,127 @@ function evaluateMember(
   };
 }
 
+type RerollRejectionReason =
+  | "insufficient_eligible_candidates"
+  | "draw_in_progress";
+
+interface RerollRejectionMetadata {
+  requestedWinnerCount: number;
+  eligibleCandidateCount: number | null;
+  reason: RerollRejectionReason;
+  notificationSent?: boolean;
+}
+
+async function deliverExistingRerollRejection(
+  dependencies: LifecycleDependencies,
+  jobId: string,
+  giveaway: WorkerGiveaway,
+): Promise<boolean> {
+  const result = await dependencies.pool.query(
+    `SELECT metadata FROM audit_events
+     WHERE id = $1 AND action = 'reroll_rejected'`,
+    [jobId],
+  );
+  if (!result.rows[0]) return false;
+  const metadata = result.rows[0].metadata as RerollRejectionMetadata;
+  if (!metadata.notificationSent) {
+    await dependencies.discord.postRerollRejected(
+      giveaway,
+      Number(metadata.requestedWinnerCount),
+      metadata.eligibleCandidateCount === null
+        ? null
+        : Number(metadata.eligibleCandidateCount),
+      metadata.reason,
+    );
+    await dependencies.pool.query(
+      `UPDATE audit_events
+       SET metadata = jsonb_set(metadata, '{notificationSent}', 'true'::jsonb, true)
+       WHERE id = $1`,
+      [jobId],
+    );
+  }
+  return true;
+}
+
+async function rejectReroll(
+  dependencies: LifecycleDependencies,
+  jobId: string,
+  giveaway: WorkerGiveaway,
+  actorUserId: string | null,
+  requestedWinnerCount: number,
+  eligibleCandidateCount: number | null,
+  reason: RerollRejectionReason,
+  exclusions: RerollExclusion[],
+): Promise<void> {
+  await dependencies.pool.query(
+    `INSERT INTO audit_events
+     (id, guild_id, giveaway_id, actor_user_id, action, source, metadata)
+     VALUES ($1, $2, $3, $4, 'reroll_rejected', 'worker', $5::jsonb)
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      jobId,
+      giveaway.guildId,
+      giveaway.id,
+      actorUserId,
+      JSON.stringify({
+        jobId,
+        requestedWinnerCount,
+        eligibleCandidateCount,
+        reason,
+        exclusionCounts: countExclusionReasons(exclusions),
+        notificationSent: false,
+      }),
+    ],
+  );
+  await deliverExistingRerollRejection(dependencies, jobId, giveaway);
+}
+
 async function prepareDraw(
   dependencies: LifecycleDependencies,
+  jobId: string,
   giveawayId: string,
   actorUserId: string | null,
   reroll: boolean,
+  requestedRerollWinnerCount?: number,
 ): Promise<void> {
   const { pool, discord } = dependencies;
+  if (await getDraw(pool, jobId)) return;
   let giveaway = await getGiveaway(pool, giveawayId);
   if (!giveaway || giveaway.status === "deleted") return;
+  if (reroll && (await deliverExistingRerollRejection(dependencies, jobId, giveaway))) {
+    return;
+  }
+  const requestedWinnerCount = reroll
+    ? requestedRerollWinnerCount ?? giveaway.winnerCount
+    : giveaway.winnerCount;
+  if (
+    !Number.isSafeInteger(requestedWinnerCount) ||
+    requestedWinnerCount < 1 ||
+    requestedWinnerCount > MAX_REROLL_WINNERS
+  ) {
+    throw new Error("The reroll winner count is invalid.");
+  }
+  if (reroll) {
+    const pending = await pool.query(
+      `SELECT 1 FROM draws
+       WHERE giveaway_id = $1 AND status IN ('awaiting_beacon', 'drawing')
+       LIMIT 1`,
+      [giveaway.id],
+    );
+    if (pending.rows[0]) {
+      await rejectReroll(
+        dependencies,
+        jobId,
+        giveaway,
+        actorUserId,
+        requestedWinnerCount,
+        null,
+        "draw_in_progress",
+        [],
+      );
+      return;
+    }
+  }
   if (reroll && giveaway.status !== "ended") {
     throw new Error("Only ended giveaways can be rerolled.");
   }
@@ -223,12 +342,30 @@ async function prepareDraw(
   const exclusions = eligibility.flatMap((result) =>
     result.exclusion ? [result.exclusion] : [],
   );
+  if (
+    reroll &&
+    !canFulfillReroll(requestedWinnerCount, candidates.length)
+  ) {
+    await rejectReroll(
+      dependencies,
+      jobId,
+      giveaway,
+      actorUserId,
+      requestedWinnerCount,
+      candidates.length,
+      "insufficient_eligible_candidates",
+      exclusions,
+    );
+    return;
+  }
   const snapshot = await candidateHash(candidates);
   const info = await chainInfo(dependencies);
   const target = Math.ceil(Date.now() / 1000) + 15;
   const round = roundAtOrAfter(info, target);
   await createDrawCommitment(pool, {
+    drawId: jobId,
     giveaway,
+    requestedWinnerCount,
     candidates,
     exclusions,
     candidateHash: snapshot,
@@ -353,7 +490,7 @@ async function completeDraw(
   const beacon = await fetchBeacon(dependencies.drand, draw.drandRound);
   const winners = await selectWeightedWinners(
     candidates,
-    giveaway.winnerCount,
+    draw.requestedWinnerCount,
     beacon.randomness,
     draw.candidateHash,
     draw.drawNumber,
@@ -499,10 +636,27 @@ export async function processJob(
       if (job.giveawayId) await refreshGiveaway(dependencies, job.giveawayId);
       return;
     case "end_giveaway":
-      if (job.giveawayId) await prepareDraw(dependencies, job.giveawayId, actorUserId, false);
+      if (job.giveawayId) {
+        await prepareDraw(dependencies, job.id, job.giveawayId, actorUserId, false);
+      }
       return;
     case "reroll_giveaway":
-      if (job.giveawayId) await prepareDraw(dependencies, job.giveawayId, actorUserId, true);
+      if (job.giveawayId) {
+        const winnerCount =
+          job.payload.winnerCount === undefined
+            ? undefined
+            : typeof job.payload.winnerCount === "number"
+              ? job.payload.winnerCount
+              : Number.NaN;
+        await prepareDraw(
+          dependencies,
+          job.id,
+          job.giveawayId,
+          actorUserId,
+          true,
+          winnerCount,
+        );
+      }
       return;
     case "complete_draw":
       if (typeof job.payload.drawId === "string") {

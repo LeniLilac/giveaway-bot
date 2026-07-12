@@ -63,6 +63,10 @@ seed = SHA256(
 
 ## 5. Unbiased weighted selection
 
+Every draw stores an immutable positive requested winner count before its future
+drand round is committed. The first draw uses the giveaway's configured count;
+each reroll uses the count supplied for that reroll.
+
 Selection is without replacement. For winner index `i` starting at zero:
 
 ```text
@@ -87,6 +91,11 @@ This rejection step prevents modulo bias.
 ## 6. Rerolls
 
 A reroll creates a new numbered draw and new future drand commitment. It uses the current active entries and role state, but excludes all user IDs found in any prior completed draw for the giveaway.
+
+A reroll succeeds only when its committed candidate set contains at least the
+requested number of fresh winners. If fewer eligible non-winners remain, Lilac
+records a `reroll_rejected` audit event and does not create a draw, commit a
+drand round, change the current winner set, or mutate prize-role claims.
 
 ## 7. Redaction
 

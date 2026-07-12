@@ -493,15 +493,68 @@ export async function leaveGiveaway(
 }
 
 export async function enqueueAction(
-  db: Queryable,
+  db: Pool,
   type: "start_giveaway" | "end_giveaway" | "reroll_giveaway" | "delete_giveaway",
   giveaway: GiveawayRecord,
   actorUserId: string,
   source: "discord" | "web",
+  winnerCount?: number,
 ): Promise<void> {
-  await db.query(
-    `INSERT INTO jobs (id, type, giveaway_id, payload, run_at)
-     VALUES ($1, $2, $3, $4::jsonb, now())`,
-    [randomUUID(), type, giveaway.id, JSON.stringify({ actorUserId, source })],
-  );
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    if (type === "reroll_giveaway") {
+      if (!winnerCount) throw new Error("A winner count is required for rerolls.");
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+        [giveaway.id],
+      );
+      const pending = await client.query(
+        `SELECT EXISTS (
+           SELECT 1 FROM draws
+           WHERE giveaway_id = $1 AND status IN ('awaiting_beacon', 'drawing')
+         ) OR EXISTS (
+           SELECT 1 FROM jobs
+           WHERE giveaway_id = $1 AND type = 'reroll_giveaway'
+             AND completed_at IS NULL
+         ) AS busy`,
+        [giveaway.id],
+      );
+      if (pending.rows[0]?.busy) {
+        throw new Error("Another reroll is already queued or drawing.");
+      }
+    }
+    const payload = {
+      actorUserId,
+      source,
+      ...(winnerCount === undefined ? {} : { winnerCount }),
+    };
+    await client.query(
+      `INSERT INTO jobs (id, type, giveaway_id, payload, run_at)
+       VALUES ($1, $2, $3, $4::jsonb, now())`,
+      [randomUUID(), type, giveaway.id, JSON.stringify(payload)],
+    );
+    await client.query(
+      `INSERT INTO audit_events
+       (id, guild_id, giveaway_id, actor_user_id, action, source, metadata)
+       VALUES ($1, $2, $3, $4, 'action_queued', $5, $6::jsonb)`,
+      [
+        randomUUID(),
+        giveaway.guildId,
+        giveaway.id,
+        actorUserId,
+        source,
+        JSON.stringify({
+          requestedAction: type.replace(/_giveaway$/, ""),
+          ...(winnerCount === undefined ? {} : { winnerCount }),
+        }),
+      ],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }

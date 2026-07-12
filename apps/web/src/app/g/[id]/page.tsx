@@ -40,7 +40,7 @@ export default async function PublicGiveawayPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<{ page?: string; draw?: string }>;
 }): Promise<React.ReactElement> {
   const { id } = await params;
   const query = await searchParams;
@@ -51,7 +51,14 @@ export default async function PublicGiveawayPage({
   ]);
   if (!data) notFound();
   const { giveaway, participants, participantTotal, draws, audit, activity } = data;
-  const latestDraw = draws[0] ?? null;
+  const requestedDrawNumber = /^\d+$/.test(query.draw ?? "")
+    ? Number(query.draw)
+    : null;
+  const selectedDraw =
+    draws.find((draw) => draw.drawNumber === requestedDrawNumber) ??
+    draws[0] ??
+    null;
+  const selectedDrawQuery = selectedDraw ? `&draw=${selectedDraw.drawNumber}` : "";
   const pages = Math.max(1, Math.ceil(participantTotal / 100));
   const discordUrl = giveaway.messageId
     ? `https://discord.com/channels/${giveaway.guildId}/${giveaway.channelId}/${giveaway.messageId}`
@@ -99,10 +106,26 @@ export default async function PublicGiveawayPage({
           <>
             <section className="fact-strip" aria-label="Giveaway summary">
               <div><small>Participants</small><strong>{giveaway.participantCount.toLocaleString()}</strong></div>
-              <div><small>Winners requested</small><strong>{giveaway.winnerCount.toLocaleString()}</strong></div>
+              <div><small>Initial winners requested</small><strong>{giveaway.winnerCount.toLocaleString()}</strong></div>
               <div><small>Started</small><strong><LocalTime value={giveaway.startedAt?.toISOString() ?? null} /></strong></div>
               <div><small>{giveaway.endedAt ? "Ended" : "Ends"}</small><strong><LocalTime value={(giveaway.endedAt ?? giveaway.endsAt)?.toISOString() ?? null} /></strong></div>
             </section>
+
+            {draws.length > 0 ? (
+              <nav className="draw-selector" aria-label="Draw history">
+                {[...draws].reverse().map((draw) => (
+                  <Link
+                    aria-current={draw.id === selectedDraw?.id ? "page" : undefined}
+                    href={`?draw=${draw.drawNumber}${page > 1 ? `&page=${page}` : ""}`}
+                    key={draw.id}
+                  >
+                    {draw.drawNumber === 1
+                      ? "Draw 1 (original)"
+                      : `Draw ${draw.drawNumber} (reroll ${draw.drawNumber - 1})`}
+                  </Link>
+                ))}
+              </nav>
+            ) : null}
 
             <section className="evidence-section proof-section">
               <div className="section-heading public-section-heading">
@@ -111,9 +134,9 @@ export default async function PublicGiveawayPage({
                   <h2>Draw proof</h2>
                   <p>The committed inputs and resulting beacon are shown without requiring sign-in.</p>
                 </div>
-                {latestDraw ? <Status value={latestDraw.status} /> : null}
+                {selectedDraw ? <Status value={selectedDraw.status} /> : null}
               </div>
-              {latestDraw ? (
+              {selectedDraw ? (
                 <div className="proof-layout">
                   <dl className="proof-values">
                     <div>
@@ -122,31 +145,39 @@ export default async function PublicGiveawayPage({
                     </div>
                     <div>
                       <dt>Candidate snapshot SHA-256</dt>
-                      <dd><code>{latestDraw.candidateHash ?? "Pending"}</code></dd>
+                      <dd><code>{selectedDraw.candidateHash ?? "Pending"}</code></dd>
+                    </div>
+                    <div>
+                      <dt>Winners requested</dt>
+                      <dd><strong>{selectedDraw.requestedWinnerCount.toLocaleString()}</strong></dd>
+                    </div>
+                    <div>
+                      <dt>Winners selected</dt>
+                      <dd><strong>{selectedDraw.actualWinnerCount?.toLocaleString() ?? "Pending"}</strong></dd>
                     </div>
                     <div>
                       <dt>Drand Quicknet chain</dt>
-                      <dd><code>{latestDraw.drandChainHash}</code></dd>
+                      <dd><code>{selectedDraw.drandChainHash}</code></dd>
                     </div>
                     <div>
                       <dt>Committed round</dt>
-                      <dd><code>{latestDraw.drandRound}</code></dd>
+                      <dd><code>{selectedDraw.drandRound}</code></dd>
                     </div>
                     <div>
                       <dt>Beacon available at</dt>
-                      <dd><LocalTime value={latestDraw.drandBeaconTime.toISOString()} /></dd>
+                      <dd><LocalTime value={selectedDraw.drandBeaconTime.toISOString()} /></dd>
                     </div>
                     <div>
                       <dt>Randomness</dt>
-                      <dd><code>{latestDraw.drandRandomness ?? "Waiting for beacon"}</code></dd>
+                      <dd><code>{selectedDraw.drandRandomness ?? "Waiting for beacon"}</code></dd>
                     </div>
                     <div>
                       <dt>Signature</dt>
-                      <dd><code>{latestDraw.drandSignature ?? "Waiting for beacon"}</code></dd>
+                      <dd><code>{selectedDraw.drandSignature ?? "Waiting for beacon"}</code></dd>
                     </div>
                   </dl>
                   <aside className="verification-note">
-                    <span className="verification-number">{latestDraw.drawNumber.toString().padStart(2, "0")}</span>
+                    <span className="verification-number">{selectedDraw.drawNumber.toString().padStart(2, "0")}</span>
                     <h3>Reproduce this draw</h3>
                     <ol>
                       <li>Sort candidates by join time, then user ID.</li>
@@ -155,11 +186,11 @@ export default async function PublicGiveawayPage({
                       <li>Run weighted rejection sampling without replacement.</li>
                     </ol>
                     <a
-                      href={`https://api.drand.sh/${latestDraw.drandChainHash}/public/${latestDraw.drandRound}`}
+                      href={`https://api.drand.sh/${selectedDraw.drandChainHash}/public/${selectedDraw.drandRound}`}
                     >
                       Fetch this beacon from drand
                     </a>
-                    <a href={`https://api.drand.sh/${latestDraw.drandChainHash}/info`}>
+                    <a href={`https://api.drand.sh/${selectedDraw.drandChainHash}/info`}>
                       Inspect the pinned Quicknet chain
                     </a>
                   </aside>
@@ -179,9 +210,9 @@ export default async function PublicGiveawayPage({
                   <h2>Winners</h2>
                 </div>
               </div>
-              {latestDraw?.winners.length ? (
+              {selectedDraw?.winners.length ? (
                 <ol className="winner-list">
-                  {latestDraw.winners.map((winner) => (
+                  {selectedDraw.winners.map((winner) => (
                     <li key={winner.userId}>
                       <span>{winner.position.toString().padStart(2, "0")}</span>
                       <strong>{winner.username}</strong>
@@ -264,9 +295,9 @@ export default async function PublicGiveawayPage({
               </div>
               {pages > 1 ? (
                 <nav className="pagination" aria-label="Participant pages">
-                  {page > 1 ? <Link href={`?page=${page - 1}`}>Previous</Link> : <span />}
+                  {page > 1 ? <Link href={`?page=${page - 1}${selectedDrawQuery}`}>Previous</Link> : <span />}
                   <span>Page {page} of {pages}</span>
-                  {page < pages ? <Link href={`?page=${page + 1}`}>Next</Link> : <span />}
+                  {page < pages ? <Link href={`?page=${page + 1}${selectedDrawQuery}`}>Next</Link> : <span />}
                 </nav>
               ) : null}
             </section>

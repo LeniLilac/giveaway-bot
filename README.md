@@ -6,7 +6,7 @@ Lilac is a Discord giveaway bot and public dashboard. It freezes the eligible pa
 
 - `/giveaway create` with flexible durations, Unix timestamps, scheduled starts, unlimited winner counts, role prizes, required message counts, required roles, additive role bonuses, alternate channels, and host credit
 - Combined ephemeral confirmation for all-or-one role requirements and all-time-or-since-start message requirements
-- `/giveaway start`, `end`, `reroll`, `delete`, `queue`, and `list`
+- `/giveaway start`, `end`, `reroll`, `delete`, `queue`, and `list`; rerolls require an exact fresh-winner count and support a completed-giveaway picker
 - Discord Components V2 messages with live participant counts
 - Up to 1,000 active or queued giveaways per server
 - Public participants, exact join times, winners, exclusions, audit history, activity graph, and drand evidence

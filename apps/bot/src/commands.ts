@@ -3,6 +3,7 @@ import {
   SlashCommandBuilder,
   type RESTPostAPIApplicationCommandsJSONBody,
 } from "discord.js";
+import { MAX_REROLL_WINNERS } from "./reroll.js";
 
 export const commandData: RESTPostAPIApplicationCommandsJSONBody[] = [
   new SlashCommandBuilder()
@@ -72,7 +73,16 @@ export const commandData: RESTPostAPIApplicationCommandsJSONBody[] = [
         .setName("reroll")
         .setDescription("Reroll a completed giveaway")
         .addStringOption((option) =>
-          option.setName("message_id").setDescription("Giveaway message ID").setRequired(true),
+          option
+            .setName("message_id")
+            .setDescription("Giveaway message ID; leave blank to open the picker"),
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName("winners")
+            .setDescription("Fresh winners to select")
+            .setMinValue(1)
+            .setMaxValue(MAX_REROLL_WINNERS),
         ),
     )
     .addSubcommand((command) =>

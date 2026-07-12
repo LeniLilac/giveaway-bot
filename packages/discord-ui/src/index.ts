@@ -208,7 +208,7 @@ export function winnerComponents(
 
 export interface GiveawayPickerPagination {
   page: number;
-  pageAction: "start" | "queue" | "list";
+  pageAction: "start" | "queue" | "list" | "reroll";
   hasPrevious: boolean;
   hasNext: boolean;
 }

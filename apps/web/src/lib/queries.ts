@@ -46,6 +46,8 @@ export interface Participant {
 export interface PublicDraw {
   id: string;
   drawNumber: number;
+  requestedWinnerCount: number;
+  actualWinnerCount: number | null;
   requestedAt: Date;
   candidateHash: string | null;
   drandChainHash: string;
@@ -182,6 +184,9 @@ export async function getPublicGiveaway(
     draws.push({
       id: row.id as string,
       drawNumber: Number(row.draw_number),
+      requestedWinnerCount: Number(row.requested_winner_count),
+      actualWinnerCount:
+        row.status === "complete" ? winnerResult.rows.length : null,
       requestedAt: new Date(row.requested_at as string),
       candidateHash: (row.candidate_hash as string | null) ?? null,
       drandChainHash: row.drand_chain_hash as string,

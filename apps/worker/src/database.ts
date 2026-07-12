@@ -47,11 +47,26 @@ export interface DrawRow {
   id: string;
   giveawayId: string;
   drawNumber: number;
+  requestedWinnerCount: number;
   candidateHash: string;
   drandChainHash: string;
   drandRound: bigint;
   drandBeaconTime: Date;
   status: string;
+}
+
+function mapDraw(row: QueryResultRow): DrawRow {
+  return {
+    id: row.id as string,
+    giveawayId: row.giveaway_id as string,
+    drawNumber: Number(row.draw_number),
+    requestedWinnerCount: Number(row.requested_winner_count),
+    candidateHash: row.candidate_hash as string,
+    drandChainHash: row.drand_chain_hash as string,
+    drandRound: BigInt(row.drand_round as string),
+    drandBeaconTime: new Date(row.drand_beacon_time as string),
+    status: row.status as string,
+  };
 }
 
 function mapGiveaway(row: QueryResultRow): WorkerGiveaway {
@@ -215,7 +230,9 @@ export async function previousWinnerIds(
 export async function createDrawCommitment(
   pool: Pool,
   input: {
+    drawId: string;
     giveaway: WorkerGiveaway;
+    requestedWinnerCount: number;
     candidates: Candidate[];
     exclusions: Array<{ userId: string; reason: string }>;
     candidateHash: string;
@@ -231,23 +248,40 @@ export async function createDrawCommitment(
     await client.query("SELECT id FROM giveaways WHERE id = $1 FOR UPDATE", [
       input.giveaway.id,
     ]);
+    const existing = await client.query("SELECT * FROM draws WHERE id = $1", [
+      input.drawId,
+    ]);
+    if (existing.rows[0]) {
+      await client.query("COMMIT");
+      return mapDraw(existing.rows[0]);
+    }
+    const pending = await client.query(
+      `SELECT id FROM draws
+       WHERE giveaway_id = $1 AND status IN ('awaiting_beacon', 'drawing')
+       LIMIT 1`,
+      [input.giveaway.id],
+    );
+    if (pending.rows[0]) {
+      throw new Error("Another draw is already awaiting its drand beacon.");
+    }
     const numberResult = await client.query(
       `SELECT COALESCE(max(draw_number), 0)::int + 1 AS draw_number
        FROM draws WHERE giveaway_id = $1`,
       [input.giveaway.id],
     );
     const drawNumber = Number(numberResult.rows[0]!.draw_number);
-    const drawId = randomUUID();
+    const drawId = input.drawId;
     await client.query(
       `INSERT INTO draws (
-        id, giveaway_id, draw_number, requested_by_user_id, candidate_hash,
-        drand_chain_hash, drand_round, drand_beacon_time, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'awaiting_beacon')`,
+        id, giveaway_id, draw_number, requested_by_user_id, requested_winner_count,
+        candidate_hash, drand_chain_hash, drand_round, drand_beacon_time, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'awaiting_beacon')`,
       [
         drawId,
         input.giveaway.id,
         drawNumber,
         input.actorUserId,
+        input.requestedWinnerCount,
         input.candidateHash,
         input.chainHash,
         input.round.toString(),
@@ -303,7 +337,12 @@ export async function createDrawCommitment(
       `INSERT INTO audit_events
        (id, guild_id, giveaway_id, actor_user_id, action, source, metadata)
        VALUES ($1, $2, $3, $4, 'draw_committed', 'worker',
-               jsonb_build_object('drawId', $5::text, 'candidateHash', $6::text, 'drandRound', $7::text))`,
+               jsonb_build_object(
+                 'drawId', $5::text,
+                 'candidateHash', $6::text,
+                 'drandRound', $7::text,
+                 'requestedWinnerCount', $8::int
+               ))`,
       [
         randomUUID(),
         input.giveaway.guildId,
@@ -312,6 +351,7 @@ export async function createDrawCommitment(
         drawId,
         input.candidateHash,
         input.round.toString(),
+        input.requestedWinnerCount,
       ],
     );
     await client.query("COMMIT");
@@ -319,6 +359,7 @@ export async function createDrawCommitment(
       id: drawId,
       giveawayId: input.giveaway.id,
       drawNumber,
+      requestedWinnerCount: input.requestedWinnerCount,
       candidateHash: input.candidateHash,
       drandChainHash: input.chainHash,
       drandRound: input.round,
@@ -336,18 +377,7 @@ export async function createDrawCommitment(
 export async function getDraw(pool: Pool, drawId: string): Promise<DrawRow | null> {
   const result = await pool.query("SELECT * FROM draws WHERE id = $1", [drawId]);
   const row = result.rows[0];
-  return row
-    ? {
-        id: row.id as string,
-        giveawayId: row.giveaway_id as string,
-        drawNumber: Number(row.draw_number),
-        candidateHash: row.candidate_hash as string,
-        drandChainHash: row.drand_chain_hash as string,
-        drandRound: BigInt(row.drand_round as string),
-        drandBeaconTime: new Date(row.drand_beacon_time as string),
-        status: row.status as string,
-      }
-    : null;
+  return row ? mapDraw(row) : null;
 }
 
 export async function getDrawCandidates(pool: Pool, drawId: string): Promise<Candidate[]> {
@@ -412,14 +442,30 @@ export async function persistWinners(
       `INSERT INTO audit_events
        (id, guild_id, giveaway_id, action, source, metadata)
        VALUES ($1, $2, $3, 'draw_completed', 'worker',
-         jsonb_build_object('drawId', $4::text, 'winnerCount', $5::int))`,
-      [randomUUID(), giveaway.guildId, giveaway.id, draw.id, winners.length],
+         jsonb_build_object(
+           'drawId', $4::text,
+           'requestedWinnerCount', $5::int,
+           'winnerCount', $6::int
+         ))`,
+      [
+        randomUUID(),
+        giveaway.guildId,
+        giveaway.id,
+        draw.id,
+        draw.requestedWinnerCount,
+        winners.length,
+      ],
     );
     await client.query(
       `INSERT INTO audit_events
        (id, guild_id, giveaway_id, action, source, metadata)
        VALUES ($1, $2, $3, $4, 'worker',
-         jsonb_build_object('drawId', $5::text, 'drawNumber', $6::int))`,
+         jsonb_build_object(
+           'drawId', $5::text,
+           'drawNumber', $6::int,
+           'requestedWinnerCount', $7::int,
+           'winnerCount', $8::int
+         ))`,
       [
         randomUUID(),
         giveaway.guildId,
@@ -427,6 +473,8 @@ export async function persistWinners(
         draw.drawNumber === 1 ? "ended" : "rerolled",
         draw.id,
         draw.drawNumber,
+        draw.requestedWinnerCount,
+        winners.length,
       ],
     );
     await client.query("COMMIT");

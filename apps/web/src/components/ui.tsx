@@ -200,9 +200,25 @@ export function GiveawayTable({
                   Inspect
                 </Link>
                 {possibleActions(giveaway.status).map((action) => (
-                  <form action={queueGiveawayAction} key={action}>
+                  <form
+                    action={queueGiveawayAction}
+                    className={action === "reroll" ? "reroll-action" : undefined}
+                    key={action}
+                  >
                     <input name="giveawayId" type="hidden" value={giveaway.id} />
                     <input name="action" type="hidden" value={action} />
+                    {action === "reroll" ? (
+                      <input
+                        aria-label="Number of fresh winners"
+                        max={2_147_483_647}
+                        min={1}
+                        name="winnerCount"
+                        placeholder="Winners"
+                        required
+                        step={1}
+                        type="number"
+                      />
+                    ) : null}
                     <button
                       className={
                         action === "delete"
