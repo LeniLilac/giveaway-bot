@@ -59,6 +59,8 @@ jobs:
           done
           node --check ops/dev.mjs
           docker compose --env-file .env.example config --quiet
+          docker compose --env-file .env.example config --format json \
+            | node ops/validate-compose-runtime-env.mjs
       - name: Validate PowerShell operations scripts
         shell: pwsh
         run: |
