@@ -6,8 +6,39 @@
 CREATE OR REPLACE FUNCTION role_policy_default_probe() RETURNS integer
 LANGUAGE sql AS 'SELECT 1';
 
+-- Exercise the exact conflict path used when Discord guild metadata is
+-- refreshed. Privilege predicates alone do not prove that PostgreSQL accepts
+-- an INSERT ... ON CONFLICT statement under each runtime identity.
+BEGIN;
+INSERT INTO guild_settings (guild_id, guild_name, guild_icon)
+VALUES ('runtime-role-bot-upsert-probe', 'Before', NULL);
+SET LOCAL ROLE :"bot_user";
+INSERT INTO guild_settings (guild_id, guild_name, guild_icon)
+VALUES ('runtime-role-bot-upsert-probe', 'After', 'bot-icon')
+ON CONFLICT (guild_id) DO UPDATE
+SET guild_name = EXCLUDED.guild_name,
+    guild_icon = EXCLUDED.guild_icon,
+    updated_at = now();
+ROLLBACK;
+
+BEGIN;
+INSERT INTO guild_settings (guild_id, guild_name, guild_icon)
+VALUES ('runtime-role-web-upsert-probe', 'Before', NULL);
+SET LOCAL ROLE :"web_user";
+INSERT INTO guild_settings (guild_id, guild_name, guild_icon)
+VALUES ('runtime-role-web-upsert-probe', 'After', 'web-icon')
+ON CONFLICT (guild_id) DO UPDATE
+SET guild_name = EXCLUDED.guild_name,
+    guild_icon = EXCLUDED.guild_icon,
+    updated_at = now();
+ROLLBACK;
+
 SELECT (
   has_table_privilege(:'bot_user', 'giveaways', 'SELECT')
+  AND has_column_privilege(:'bot_user', 'guild_settings', 'guild_id', 'SELECT')
+  AND has_column_privilege(:'bot_user', 'guild_settings', 'guild_name', 'SELECT')
+  AND has_column_privilege(:'bot_user', 'guild_settings', 'guild_icon', 'SELECT')
+  AND NOT has_column_privilege(:'bot_user', 'guild_settings', 'updated_at', 'SELECT')
   AND has_column_privilege(:'bot_user', 'giveaways', 'participant_count', 'UPDATE')
   AND NOT has_column_privilege(:'bot_user', 'giveaways', 'status', 'UPDATE')
   AND NOT has_table_privilege(:'bot_user', 'draws', 'UPDATE')
@@ -15,6 +46,10 @@ SELECT (
   AND NOT has_table_privilege(:'worker_user', 'draws', 'DELETE')
   AND NOT has_table_privilege(:'worker_user', 'schema_migrations', 'SELECT')
   AND has_column_privilege(:'web_user', 'giveaways', 'updated_at', 'UPDATE')
+  AND has_column_privilege(:'web_user', 'guild_settings', 'guild_id', 'SELECT')
+  AND has_column_privilege(:'web_user', 'guild_settings', 'guild_name', 'SELECT')
+  AND has_column_privilege(:'web_user', 'guild_settings', 'guild_icon', 'SELECT')
+  AND NOT has_column_privilege(:'web_user', 'guild_settings', 'updated_at', 'SELECT')
   AND NOT has_column_privilege(:'web_user', 'giveaways', 'status', 'UPDATE')
   AND NOT has_column_privilege(
     :'web_user', 'data_deletion_requests', 'error', 'UPDATE'

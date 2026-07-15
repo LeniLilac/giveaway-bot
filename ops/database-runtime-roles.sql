@@ -162,6 +162,12 @@ SELECT format($grant$
     audit_events, jobs
   TO %I
 $grant$, :'bot_user') \gexec
+-- INSERT ... ON CONFLICT reads the excluded guild identity columns before
+-- applying the column-scoped update below.
+SELECT format(
+  'GRANT SELECT (guild_id, guild_name, guild_icon) ON TABLE guild_settings TO %I',
+  :'bot_user'
+) \gexec
 SELECT format('GRANT UPDATE (guild_name, guild_icon, updated_at) ON TABLE guild_settings TO %I', :'bot_user') \gexec
 SELECT format('GRANT UPDATE (payload, state, consumed_at) ON TABLE giveaway_drafts TO %I', :'bot_user') \gexec
 SELECT format('GRANT UPDATE (participant_count, updated_at) ON TABLE giveaways TO %I', :'bot_user') \gexec
@@ -218,6 +224,10 @@ SELECT format($grant$
     data_deletion_requests, privacy_deletion_fences, jobs, audit_events
   TO %I
 $grant$, :'web_user') \gexec
+SELECT format(
+  'GRANT SELECT (guild_id, guild_name, guild_icon) ON TABLE guild_settings TO %I',
+  :'web_user'
+) \gexec
 SELECT format('GRANT UPDATE (guild_name, guild_icon, updated_at) ON TABLE guild_settings TO %I', :'web_user') \gexec
 SELECT format(
   'GRANT UPDATE (username, global_name, avatar_hash, access_token_ciphertext, refresh_token_ciphertext, expires_at, scope, updated_at) ON TABLE oauth_accounts TO %I',
