@@ -3,8 +3,10 @@ import type {
   ChatInputCommandInteraction,
   ModalSubmitInteraction,
 } from "discord.js";
+import { MessageFlags } from "discord.js";
 import {
   acknowledgeComponentReply,
+  publishComponentReply,
   replyNotice,
 } from "./interactions.js";
 
@@ -52,5 +54,24 @@ describe("interaction acknowledgements", () => {
     expect(editReply.mock.calls[0]?.[0]).toHaveProperty("components");
     expect(editReply.mock.calls[0]?.[0]).not.toHaveProperty("flags");
     expect(followUp).not.toHaveBeenCalled();
+  });
+
+  it("publishes a successful list after its private acknowledgement", async () => {
+    const followUp = vi.fn<(options: unknown) => Promise<void>>().mockResolvedValue();
+    const deleteReply = vi.fn<() => Promise<void>>().mockResolvedValue();
+    const components = [{ type: 17 }];
+    const interaction = {
+      deferred: false,
+      replied: true,
+      followUp,
+      deleteReply,
+    } as unknown as ChatInputCommandInteraction;
+
+    await publishComponentReply(interaction, components as never);
+
+    expect(followUp).toHaveBeenCalledOnce();
+    const payload = followUp.mock.calls[0]?.[0] as { flags: number };
+    expect(payload.flags & MessageFlags.Ephemeral).toBe(0);
+    expect(deleteReply).toHaveBeenCalledOnce();
   });
 });

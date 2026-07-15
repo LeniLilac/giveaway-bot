@@ -207,6 +207,18 @@ async function replaceComponents(
   }
 }
 
+export async function publishComponentReply(
+  interaction: ChatInputCommandInteraction,
+  components: never,
+): Promise<void> {
+  if (!interaction.replied && !interaction.deferred) {
+    await interaction.reply({ components, flags: COMPONENTS_V2_FLAG });
+    return;
+  }
+  await interaction.followUp({ components, flags: COMPONENTS_V2_FLAG });
+  await interaction.deleteReply().catch(() => undefined);
+}
+
 export async function replyNotice(
   interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction,
   title: string,
@@ -494,8 +506,13 @@ async function handleGiveawayButton(
 ): Promise<void> {
   if (!interaction.guildId) throw new Error("This giveaway action requires a server.");
   if (component.type === "page") {
+    if (component.kind === "list") {
+      await assertAuthorized(interaction, dependencies.pool, component.kind);
+    }
     await deferComponentUpdate(interaction);
-    await assertAuthorized(interaction, dependencies.pool, component.kind);
+    if (component.kind !== "list") {
+      await assertAuthorized(interaction, dependencies.pool, component.kind);
+    }
     await replaceComponents(
       interaction,
       await buildPicker(
@@ -657,16 +674,18 @@ async function handleListCommand(
   await acknowledgeComponentReply(interaction);
   await assertAuthorized(interaction, dependencies.pool, kind);
   if (!interaction.guildId) throw new Error("This command requires a server.");
-  await replaceComponents(
-    interaction,
-    await buildPicker(
-      dependencies,
-      interaction.guildId,
-      interaction.user.id,
-      kind,
-      0,
-    ),
+  const picker = await buildPicker(
+    dependencies,
+    interaction.guildId,
+    interaction.user.id,
+    kind,
+    0,
   );
+  if (kind === "list") {
+    await publishComponentReply(interaction, picker);
+  } else {
+    await replaceComponents(interaction, picker);
+  }
 }
 
 export async function handleChatInput(
