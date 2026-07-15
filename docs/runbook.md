@@ -2,7 +2,9 @@
 
 ## Deploy
 
-Push `main` or run the Deploy workflow manually. The remote script fast-forwards `/opt/giveaway-bot`, runs Compose through Doppler, waits for the migration service, and reloads the existing Vanguard Caddy container.
+Push `main` or run the Deploy workflow manually. The remote script fast-forwards `/opt/giveaway-bot`, runs Compose through Doppler, waits for the migration service, registers global Discord commands from the deployed bot image, and reloads the existing Vanguard Caddy container.
+
+Command registration is an idempotent replacement of the global command set. If it fails, the Deploy workflow fails after the containers have been updated; correct the Discord or Doppler configuration and rerun the workflow to reconcile command metadata.
 
 ## Inspect
 

@@ -24,6 +24,10 @@ git pull --ff-only origin main
 doppler run --project "${DOPPLER_PROJECT}" --config "${DOPPLER_CONFIG}" -- \
   docker compose -p giveaway-bot up -d --build --remove-orphans
 
+doppler run --project "${DOPPLER_PROJECT}" --config "${DOPPLER_CONFIG}" -- \
+  docker compose -p giveaway-bot exec -T bot \
+    npm run deploy-commands -w @lilac/bot
+
 CADDY_CONTAINER="$(docker ps \
   --filter label=com.docker.compose.project=vanguard-qc-bot \
   --filter label=com.docker.compose.service=caddy \

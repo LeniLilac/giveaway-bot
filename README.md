@@ -91,7 +91,7 @@ The installation URL needs the `bot` and `applications.commands` scopes. The lan
 
 Place Lilac's role above every prize role it should award. To configure `role_prizes`, the giveaway creator must be the server owner or have Manage Roles with a highest role above every selected prize role. Administrator satisfies Manage Roles but does not bypass role hierarchy; Manage Server and configured giveaway command roles alone are not sufficient. Message Content intent is not required. Required-message eligibility uses Discord's Search Guild Messages endpoint and may briefly wait while a server search index is prepared.
 
-Register global production commands:
+Production deployments register global Discord commands automatically. To manually recover or re-register them from a Doppler-authenticated workstation:
 
 ```bash
 doppler run --project lilac-giveaway-bot --config prd -- npm run deploy-commands -w @lilac/bot
