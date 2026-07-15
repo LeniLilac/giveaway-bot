@@ -93,7 +93,7 @@ jobs:
             --env WORKER_DATABASE_USER --env WORKER_DATABASE_PASSWORD \
             --env WEB_DATABASE_USER --env WEB_DATABASE_PASSWORD \
             --env DATABASE_ROLES_SQL_PATH=/workspace/ops/database-runtime-roles.sql \
-            "$image" /workspace/ops/provision-db-roles.sh
+            "$image" sh /workspace/ops/provision-db-roles.sh
           docker run --rm --network host --volume "$PWD:/workspace:ro" \
             --env PGDATABASE --env PGHOST --env PGPASSWORD --env PGPORT --env PGUSER \
             --env BOT_DATABASE_USER --env WORKER_DATABASE_USER --env WEB_DATABASE_USER \
