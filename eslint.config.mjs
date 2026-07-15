@@ -7,9 +7,11 @@ export default defineConfig([
   ...nextTypescript,
   {
     files: ["**/*.ts", "**/*.tsx"],
+    settings: { next: { rootDir: "apps/web/" } },
     rules: {
       "@typescript-eslint/consistent-type-imports": "error",
-      "@typescript-eslint/no-explicit-any": "off"
+      "@typescript-eslint/no-explicit-any": "off",
+      "@next/next/no-html-link-for-pages": "off"
     }
   },
   globalIgnores(["**/dist/**", "**/.next/**", "coverage/**", "node_modules/**"])

@@ -11,22 +11,28 @@
     "typecheck": "npm run build:packages && npm run typecheck -w @lilac/bot && npm run typecheck -w @lilac/worker && npm run typecheck -w @lilac/web",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build",
-    "start:bot": "node apps/bot/dist/index.js",
-    "start:worker": "node apps/worker/dist/index.js",
+    "start:bot": "npm run start -w @lilac/bot",
+    "start:worker": "npm run start -w @lilac/worker",
     "start:web": "npm run start -w @lilac/web",
+    "dev": "node ops/dev.mjs",
     "dev:bot": "tsx watch apps/bot/src/index.ts",
     "dev:worker": "tsx watch apps/worker/src/index.ts",
     "dev:web": "npm run dev -w @lilac/web",
-    "deploy-commands": "node apps/bot/dist/deploy-commands.js",
-    "db:migrate": "node packages/db/dist/migrate.js"
+    "deploy-commands": "npm run deploy-commands -w @lilac/bot",
+    "db:migrate": "npm run migrate -w @lilac/db"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "eslint": "10.6.0",
+    "eslint": "9.39.2",
     "eslint-config-next": "16.2.10",
+    "postcss": "8.5.19",
     "tsx": "4.23.0",
     "typescript": "5.9.3",
     "vitest": "4.1.10"
+  },
+  "overrides": {
+    "postcss": "$postcss"
   }
 }

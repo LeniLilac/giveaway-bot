@@ -13,7 +13,8 @@
     "@lilac/core": "file:../../packages/core",
     "@lilac/discord-ui": "file:../../packages/discord-ui",
     "@lilac/proof": "file:../../packages/proof",
-    "discord.js": "14.26.5",
+    "discord.js": "14.27.0",
+    "drand-client": "1.4.2",
     "pg": "8.22.0",
     "pino": "10.3.1"
   },

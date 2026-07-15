@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@lilac/core": "file:../../packages/core",
     "next": "16.2.10",
     "pg": "8.22.0",
     "react": "19.2.7",
