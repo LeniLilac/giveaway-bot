@@ -1,4 +1,5 @@
 export const COMPONENTS_V2_FLAG = 1 << 15;
+export const MAX_PICKER_GIVEAWAYS = 8;
 
 const ComponentType = {
   ActionRow: 1,
@@ -226,7 +227,7 @@ export function giveawayPickerComponents(
   if (giveaways.length === 0) {
     components.push(text("No giveaways found on this page."));
   }
-  for (const giveaway of giveaways.slice(0, 10)) {
+  for (const giveaway of giveaways.slice(0, MAX_PICKER_GIVEAWAYS)) {
     const details = [
       `**${giveaway.prize}**`,
       `${giveaway.status} • <t:${Math.floor(giveaway.scheduledStartAt.getTime() / 1000)}:R>`,

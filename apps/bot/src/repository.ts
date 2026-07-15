@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { privacyFenceHash } from "@lilac/core";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
+import {
+  assertActionAllowed,
+  parseManagementAction,
+} from "./action-policy.js";
 
 export type GiveawayStatus =
   | "queued"
@@ -61,6 +66,86 @@ export interface GiveawayRecord {
 }
 
 type Queryable = Pick<Pool, "query"> | Pick<PoolClient, "query">;
+type GiveawayIdentifier =
+  | { kind: "uuid"; value: string }
+  | { kind: "message"; value: string };
+
+const UUID_IDENTIFIER =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MESSAGE_IDENTIFIER = /^\d{15,22}$/;
+
+interface PrivacyIdentityWrite {
+  userId: string;
+  allowCompletedReconsent: boolean;
+  label: "actor" | "host";
+}
+
+async function authorizePrivacyIdentityWrites(
+  client: PoolClient,
+  identities: PrivacyIdentityWrite[],
+  privacyHashSalt: string,
+): Promise<void> {
+  const unique = new Map<string, PrivacyIdentityWrite>();
+  for (const identity of identities) {
+    const existing = unique.get(identity.userId);
+    unique.set(identity.userId, {
+      userId: identity.userId,
+      allowCompletedReconsent:
+        identity.allowCompletedReconsent || existing?.allowCompletedReconsent === true,
+      label: existing?.label === "actor" || identity.label === "actor" ? "actor" : "host",
+    });
+  }
+  const ordered = [...unique.values()].sort((left, right) =>
+    left.userId.localeCompare(right.userId),
+  );
+  for (const identity of ordered) {
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [`privacy-delete:${identity.userId}`],
+    );
+  }
+  for (const identity of ordered) {
+    const pending = await client.query(
+      `SELECT 1 FROM data_deletion_requests
+       WHERE user_id = $1 AND status <> 'complete'
+       LIMIT 1`,
+      [identity.userId],
+    );
+    const hash = privacyFenceHash(privacyHashSalt, identity.userId);
+    const fenceResult = await client.query(
+      `SELECT completed_at, cleared_at FROM privacy_deletion_fences
+       WHERE user_id_hash = $1 FOR UPDATE`,
+      [hash],
+    );
+    const fence = fenceResult.rows[0];
+    if (pending.rows[0] || (fence && fence.cleared_at === null && fence.completed_at === null)) {
+      throw new Error(
+        identity.label === "actor"
+          ? "Your data deletion must finish before Lilac can store this action."
+          : "The credited host cannot currently be stored. Choose another host.",
+      );
+    }
+    if (!fence || fence.cleared_at !== null) continue;
+    if (!identity.allowCompletedReconsent) {
+      throw new Error("The credited host cannot currently be stored. Choose another host.");
+    }
+    const cleared = await client.query(
+      `UPDATE privacy_deletion_fences
+       SET cleared_at = clock_timestamp(), updated_at = clock_timestamp()
+       WHERE user_id_hash = $1 AND completed_at IS NOT NULL AND cleared_at IS NULL`,
+      [hash],
+    );
+    if (cleared.rowCount !== 1) {
+      throw new Error("Your privacy consent could not be updated. Please try again.");
+    }
+  }
+}
+
+export function parseGiveawayIdentifier(value: string): GiveawayIdentifier | null {
+  if (UUID_IDENTIFIER.test(value)) return { kind: "uuid", value };
+  if (MESSAGE_IDENTIFIER.test(value)) return { kind: "message", value };
+  return null;
+}
 
 function mapDraft(row: QueryResultRow): DraftRecord {
   return {
@@ -164,16 +249,35 @@ export async function createDraft(
   guildId: string,
   creatorUserId: string,
   payload: DraftPayload,
+  privacyHashSalt: string,
 ): Promise<DraftRecord> {
   const id = randomUUID();
-  const result = await pool.query(
-    `INSERT INTO giveaway_drafts
-       (id, guild_id, creator_user_id, channel_id, payload, expires_at)
-     VALUES ($1, $2, $3, $4, $5::jsonb, now() + interval '15 minutes')
-     RETURNING *`,
-    [id, guildId, creatorUserId, payload.channelId, JSON.stringify(payload)],
-  );
-  return mapDraft(result.rows[0]!);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await authorizePrivacyIdentityWrites(
+      client,
+      [
+        { userId: creatorUserId, allowCompletedReconsent: true, label: "actor" },
+        { userId: payload.hostUserId, allowCompletedReconsent: false, label: "host" },
+      ],
+      privacyHashSalt,
+    );
+    const result = await client.query(
+      `INSERT INTO giveaway_drafts
+         (id, guild_id, creator_user_id, channel_id, payload, expires_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, now() + interval '15 minutes')
+       RETURNING *`,
+      [id, guildId, creatorUserId, payload.channelId, JSON.stringify(payload)],
+    );
+    await client.query("COMMIT");
+    return mapDraft(result.rows[0]!);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getDraft(pool: Pool, id: string): Promise<DraftRecord | null> {
@@ -223,10 +327,40 @@ export async function createGiveawayFromDraft(
   userId: string,
   guildName: string,
   guildIcon: string | null,
+  privacyHashSalt: string,
 ): Promise<GiveawayRecord> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const privacyPreflight = await client.query(
+      `SELECT creator_user_id, payload FROM giveaway_drafts
+       WHERE id = $1 AND state = 'pending' AND expires_at > now()`,
+      [draftId],
+    );
+    if (!privacyPreflight.rows[0]) throw new Error("This draft has expired.");
+    if (privacyPreflight.rows[0].creator_user_id !== userId) {
+      throw new Error("Only the draft creator can continue.");
+    }
+    const preflightPayload = privacyPreflight.rows[0].payload as DraftPayload;
+    if (typeof preflightPayload?.hostUserId !== "string") {
+      throw new Error("The draft changed while its privacy state was being checked.");
+    }
+    await authorizePrivacyIdentityWrites(
+      client,
+      [
+        {
+          userId,
+          allowCompletedReconsent: true,
+          label: "actor",
+        },
+        {
+          userId: preflightPayload.hostUserId,
+          allowCompletedReconsent: false,
+          label: "host",
+        },
+      ],
+      privacyHashSalt,
+    );
     const draftResult = await client.query(
       `SELECT * FROM giveaway_drafts WHERE id = $1 FOR UPDATE`,
       [draftId],
@@ -239,8 +373,10 @@ export async function createGiveawayFromDraft(
     }
     if (!draftIsReady(draft.payload)) throw new Error("Requirement choices are incomplete.");
 
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+      `giveaway-cap:${draft.guildId}`,
+    ]);
     await upsertGuild(client, draft.guildId, guildName, guildIcon);
-    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [draft.guildId]);
     const countResult = await client.query(
       `SELECT count(*)::int AS count FROM giveaways
        WHERE guild_id = $1 AND status IN ('queued', 'starting', 'active', 'ending')`,
@@ -327,8 +463,10 @@ export async function getGiveaway(
   identifier: string,
   guildId?: string,
 ): Promise<GiveawayRecord | null> {
-  const params: unknown[] = [identifier];
-  let where = "(g.id::text = $1 OR g.message_id = $1)";
+  const parsed = parseGiveawayIdentifier(identifier);
+  if (!parsed) return null;
+  const params: unknown[] = [parsed.value];
+  let where = parsed.kind === "uuid" ? "g.id = $1::uuid" : "g.message_id = $1";
   if (guildId) {
     params.push(guildId);
     where += " AND g.guild_id = $2";
@@ -361,24 +499,99 @@ export async function listGiveaways(
   return result.rows.map(mapGiveaway);
 }
 
+async function queueGiveawayRefresh(
+  client: PoolClient,
+  giveawayId: string,
+): Promise<void> {
+  await client.query(
+    "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+    [`giveaway-refresh:${giveawayId}`],
+  );
+  const queued = await client.query(
+    `SELECT id FROM jobs
+     WHERE giveaway_id = $1
+       AND type = 'refresh_giveaway'
+       AND completed_at IS NULL
+       AND locked_at IS NULL
+     ORDER BY run_at DESC
+     LIMIT 1
+     FOR UPDATE`,
+    [giveawayId],
+  );
+  if (queued.rows[0]) {
+    await client.query(
+      `UPDATE jobs
+       SET run_at = LEAST(run_at, now() + interval '2 seconds'),
+           attempts = 0,
+           last_error = NULL
+       WHERE id = $1`,
+      [queued.rows[0].id],
+    );
+    return;
+  }
+  await client.query(
+    `INSERT INTO jobs (id, type, giveaway_id, run_at)
+     VALUES ($1, 'refresh_giveaway', $2, now() + interval '2 seconds')`,
+    [randomUUID(), giveawayId],
+  );
+}
+
 export async function joinGiveaway(
   pool: Pool,
   giveawayId: string,
   user: { id: string; username: string; globalName: string | null; avatar: string | null },
+  privacyHashSalt: string,
 ): Promise<{ joined: boolean; participantCount: number }> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [`privacy-delete:${user.id}`],
+    );
+    const pendingDeletion = await client.query(
+      `SELECT 1 FROM data_deletion_requests
+       WHERE user_id = $1 AND status <> 'complete'
+       LIMIT 1`,
+      [user.id],
+    );
+    if (pendingDeletion.rows[0]) {
+      throw new Error("Your data deletion request must finish before you can enter giveaways.");
+    }
+    const userIdHash = privacyFenceHash(privacyHashSalt, user.id);
+    const fenceResult = await client.query(
+      `SELECT completed_at, cleared_at FROM privacy_deletion_fences
+       WHERE user_id_hash = $1
+       FOR UPDATE`,
+      [userIdHash],
+    );
+    const fence = fenceResult.rows[0];
+    if (fence && fence.cleared_at === null) {
+      if (fence.completed_at === null) {
+        throw new Error("Your data deletion request must finish before you can enter giveaways.");
+      }
+      const cleared = await client.query(
+        `UPDATE privacy_deletion_fences
+         SET cleared_at = clock_timestamp(), updated_at = clock_timestamp()
+         WHERE user_id_hash = $1
+           AND completed_at IS NOT NULL
+           AND cleared_at IS NULL`,
+        [userIdHash],
+      );
+      if (cleared.rowCount !== 1) {
+        throw new Error("Your privacy consent could not be updated. Please try again.");
+      }
+    }
     const giveawayResult = await client.query(
-      "SELECT guild_id, status, ends_at FROM giveaways WHERE id = $1 FOR UPDATE",
+      `SELECT guild_id, status, ends_at,
+              status = 'active'
+                AND ends_at IS NOT NULL
+                AND ends_at > clock_timestamp() AS entry_open
+       FROM giveaways WHERE id = $1 FOR UPDATE`,
       [giveawayId],
     );
     const giveaway = giveawayResult.rows[0];
-    if (
-      !giveaway ||
-      giveaway.status !== "active" ||
-      (giveaway.ends_at && new Date(giveaway.ends_at as string) <= new Date())
-    ) {
+    if (!giveaway?.entry_open) {
       throw new Error("This giveaway is not active.");
     }
     const existing = await client.query(
@@ -427,6 +640,7 @@ export async function joinGiveaway(
        VALUES ($1, $2, $3, $4, 'joined', 'discord')`,
       [randomUUID(), giveaway.guild_id, giveawayId, user.id],
     );
+    await queueGiveawayRefresh(client, giveawayId);
     await client.query("COMMIT");
     return { joined: true, participantCount: Number(count.rows[0]!.participant_count) };
   } catch (error) {
@@ -441,16 +655,45 @@ export async function leaveGiveaway(
   pool: Pool,
   giveawayId: string,
   userId: string,
+  privacyHashSalt: string,
 ): Promise<{ left: boolean; participantCount: number }> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [`privacy-delete:${userId}`],
+    );
+    const pendingDeletion = await client.query(
+      `SELECT 1 FROM data_deletion_requests
+       WHERE user_id = $1 AND status <> 'complete'
+       LIMIT 1`,
+      [userId],
+    );
+    if (pendingDeletion.rows[0]) {
+      throw new Error("Your data deletion request must finish before entries can change.");
+    }
+    const fenceResult = await client.query(
+      `SELECT 1 FROM privacy_deletion_fences
+       WHERE user_id_hash = $1 AND cleared_at IS NULL
+       LIMIT 1`,
+      [privacyFenceHash(privacyHashSalt, userId)],
+    );
+    if (fenceResult.rows[0]) {
+      throw new Error(
+        "Your privacy deletion fence is active. Join a giveaway to explicitly re-enable participation.",
+      );
+    }
     const giveawayResult = await client.query(
-      "SELECT guild_id, status FROM giveaways WHERE id = $1 FOR UPDATE",
+      `SELECT guild_id, status,
+              status = 'active'
+                AND ends_at IS NOT NULL
+                AND ends_at > clock_timestamp() AS entry_open
+       FROM giveaways WHERE id = $1 FOR UPDATE`,
       [giveawayId],
     );
     const giveaway = giveawayResult.rows[0];
-    if (!giveaway || giveaway.status !== "active") throw new Error("This giveaway is not active.");
+    if (!giveaway?.entry_open) throw new Error("This giveaway is not active.");
     const entry = await client.query(
       `UPDATE entries SET left_at = now()
        WHERE giveaway_id = $1 AND user_id = $2 AND left_at IS NULL
@@ -482,6 +725,7 @@ export async function leaveGiveaway(
        VALUES ($1, $2, $3, $4, 'left', 'discord')`,
       [randomUUID(), giveaway.guild_id, giveawayId, userId],
     );
+    await queueGiveawayRefresh(client, giveawayId);
     await client.query("COMMIT");
     return { left: true, participantCount: Number(count.rows[0]!.participant_count) };
   } catch (error) {
@@ -498,17 +742,71 @@ export async function enqueueAction(
   giveaway: GiveawayRecord,
   actorUserId: string,
   source: "discord" | "web",
+  privacyHashSalt: string,
   winnerCount?: number,
 ): Promise<void> {
   const client = await db.connect();
   try {
     await client.query("BEGIN");
+    await authorizePrivacyIdentityWrites(
+      client,
+      [{ userId: actorUserId, allowCompletedReconsent: true, label: "actor" }],
+      privacyHashSalt,
+    );
     if (type === "reroll_giveaway") {
       if (!winnerCount) throw new Error("A winner count is required for rerolls.");
       await client.query(
         "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
         [giveaway.id],
       );
+    }
+    const current = await client.query(
+      "SELECT status FROM giveaways WHERE id = $1 FOR UPDATE",
+      [giveaway.id],
+    );
+    if (!current.rows[0]) throw new Error("Giveaway not found.");
+    const action = parseManagementAction(type.replace(/_giveaway$/, ""));
+    assertActionAllowed(action, current.rows[0].status as GiveawayStatus);
+    const payload = {
+      actorUserId,
+      source,
+      ...(winnerCount === undefined ? {} : { winnerCount }),
+    };
+    const duplicate = await client.query(
+      `SELECT id, run_at <= clock_timestamp() AS immediate FROM jobs
+       WHERE giveaway_id = $1
+         AND type = $2
+         AND completed_at IS NULL
+       ORDER BY run_at ASC
+       LIMIT 1
+       FOR UPDATE`,
+      [giveaway.id, type],
+    );
+    let insertJob = true;
+    const existingJob = duplicate.rows[0];
+    if (existingJob) {
+      if (type === "reroll_giveaway") {
+        throw new Error("Another reroll is already queued or drawing.");
+      }
+      const scheduledLifecycleJob =
+        (type === "start_giveaway" || type === "end_giveaway") &&
+        !existingJob.immediate;
+      if (!scheduledLifecycleJob) {
+        await client.query("COMMIT");
+        return;
+      }
+      await client.query(
+        `UPDATE jobs
+         SET run_at = LEAST(run_at, now()),
+             payload = payload || $2::jsonb,
+             attempts = 0,
+             last_error = NULL
+         WHERE id = $1`,
+        [existingJob.id, JSON.stringify(payload)],
+      );
+      insertJob = false;
+    }
+    if (type === "reroll_giveaway") {
       const pending = await client.query(
         `SELECT EXISTS (
            SELECT 1 FROM draws
@@ -524,16 +822,13 @@ export async function enqueueAction(
         throw new Error("Another reroll is already queued or drawing.");
       }
     }
-    const payload = {
-      actorUserId,
-      source,
-      ...(winnerCount === undefined ? {} : { winnerCount }),
-    };
-    await client.query(
-      `INSERT INTO jobs (id, type, giveaway_id, payload, run_at)
-       VALUES ($1, $2, $3, $4::jsonb, now())`,
-      [randomUUID(), type, giveaway.id, JSON.stringify(payload)],
-    );
+    if (insertJob) {
+      await client.query(
+        `INSERT INTO jobs (id, type, giveaway_id, payload, run_at)
+         VALUES ($1, $2, $3, $4::jsonb, now())`,
+        [randomUUID(), type, giveaway.id, JSON.stringify(payload)],
+      );
+    }
     await client.query(
       `INSERT INTO audit_events
        (id, guild_id, giveaway_id, actor_user_id, action, source, metadata)

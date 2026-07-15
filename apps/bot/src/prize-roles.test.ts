@@ -4,7 +4,7 @@ import {
   type ChatInputCommandInteraction,
   PermissionsBitField,
 } from "discord.js";
-import { assertPrizeRolesAwardable } from "./prize-roles.js";
+import { assertPrizeRolesAwardable as assertPrizeRolesAwardableWithOwner } from "./prize-roles.js";
 
 interface FakeRole {
   id: string;
@@ -61,6 +61,14 @@ function interaction(options: {
           },
     user: { id: options.userId ?? "100000000000000010" },
   } as unknown as ChatInputCommandInteraction;
+}
+
+function assertPrizeRolesAwardable(
+  current: ChatInputCommandInteraction | ButtonInteraction,
+  prizeRoleIds: string[],
+  currentOwnerId = current.guild?.ownerId ?? "",
+): void {
+  assertPrizeRolesAwardableWithOwner(current, prizeRoleIds, currentOwnerId);
 }
 
 const creatorRole = fakeRole("100000000000000002", "Creator", 20);
@@ -134,6 +142,38 @@ describe("prize role authorization", () => {
           roles: [higherPrize],
         }),
         [higherPrize.id],
+      ),
+    ).not.toThrow();
+  });
+
+  it("uses the resolved current owner instead of a stale cached owner", () => {
+    const formerOwner = interaction({
+      userId: "100000000000000010",
+      ownerId: "100000000000000010",
+      permissions: 0n,
+      memberRoleIds: null,
+      roles: [higherPrize],
+    });
+    expect(() =>
+      assertPrizeRolesAwardable(
+        formerOwner,
+        [higherPrize.id],
+        "100000000000000099",
+      ),
+    ).toThrow("verify your current server permissions");
+
+    const currentOwner = interaction({
+      userId: "100000000000000010",
+      ownerId: "100000000000000099",
+      permissions: 0n,
+      memberRoleIds: null,
+      roles: [higherPrize],
+    });
+    expect(() =>
+      assertPrizeRolesAwardable(
+        currentOwner,
+        [higherPrize.id],
+        "100000000000000010",
       ),
     ).not.toThrow();
   });

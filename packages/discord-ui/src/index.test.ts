@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { giveawayPickerComponents, type ApiComponent, type GiveawayView } from "./index.js";
+import {
+  MAX_PICKER_GIVEAWAYS,
+  giveawayPickerComponents,
+  type ApiComponent,
+  type GiveawayView,
+} from "./index.js";
 
 function countComponents(component: ApiComponent): number {
   const children = Array.isArray(component.components)
@@ -15,7 +20,7 @@ function countComponents(component: ApiComponent): number {
 }
 
 describe("Discord Components V2 pickers", () => {
-  it("keeps a full picker page within Discord's 40-component limit", () => {
+  it("keeps a full picker page within Discord's nested and total component limits", () => {
     const giveaways: GiveawayView[] = Array.from({ length: 10 }, (_, index) => ({
       id: `00000000-0000-0000-0000-${index.toString().padStart(12, "0")}`,
       creatorUserId: "123456789012345678",
@@ -38,6 +43,11 @@ describe("Discord Components V2 pickers", () => {
       "view",
       "https://giveaway.leni.cat",
       { page: 0, pageAction: "queue", hasPrevious: false, hasNext: true },
+    );
+    const containerChildren = payload[0]!.components as ApiComponent[];
+    expect(containerChildren).toHaveLength(10);
+    expect(containerChildren.filter((component) => component.type === 9)).toHaveLength(
+      MAX_PICKER_GIVEAWAYS,
     );
     expect(payload.reduce((total, component) => total + countComponents(component), 0)).toBeLessThanOrEqual(40);
   });

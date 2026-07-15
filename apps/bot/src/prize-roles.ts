@@ -35,6 +35,7 @@ function highestRole(roles: Role[], fallback: Role): Role {
 export function assertPrizeRolesAwardable(
   interaction: PrizeRoleInteraction,
   prizeRoleIds: string[],
+  currentOwnerId: string,
 ): void {
   if (prizeRoleIds.length === 0) return;
 
@@ -54,7 +55,7 @@ export function assertPrizeRolesAwardable(
     return role;
   });
 
-  if (interaction.user.id === guild.ownerId) return;
+  if (interaction.user.id === currentOwnerId) return;
 
   const permissions = memberPermissions(interaction.member);
   if (!permissions) {

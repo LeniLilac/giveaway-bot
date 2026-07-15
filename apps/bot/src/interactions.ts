@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   ActionRowBuilder,
   type AutocompleteInteraction,
@@ -17,13 +16,33 @@ import type { Pool } from "pg";
 import type pino from "pino";
 import {
   COMPONENTS_V2_FLAG,
+  MAX_PICKER_GIVEAWAYS,
   draftReadyComponents,
   giveawayPickerComponents,
   requirementDecisionComponents,
   simpleNotice,
 } from "@lilac/discord-ui";
+import {
+  ACTION_JOB_TYPES,
+  assertActionAllowed,
+  parseManagementAction,
+  type ManagementAction,
+} from "./action-policy.js";
+import {
+  parseDraftComponentId,
+  parseGiveawayComponentId,
+  parseRerollModalId,
+  type DraftComponentId,
+  type GiveawayComponentId,
+  type PickerKind,
+} from "./component-ids.js";
+import {
+  assertDraftPayloadShape,
+  assertDraftReferencesCurrent,
+} from "./draft-validation.js";
+import { fetchCurrentGuildOwnerId } from "./guild-owner.js";
+import { searchMessageCount } from "./message-search.js";
 import { parseBonusRoles, parseDuration, parseRoleIds, parseStart } from "./parsing.js";
-import { assertPrizeRolesAwardable } from "./prize-roles.js";
 import { parseRerollWinnerCount } from "./reroll.js";
 import {
   cancelDraft,
@@ -38,21 +57,21 @@ import {
   leaveGiveaway,
   listGiveaways,
   updateDraftDecision,
+  type DraftRecord,
   type DraftPayload,
   type GiveawayRecord,
 } from "./repository.js";
 
 const EPHEMERAL_COMPONENT_FLAGS = MessageFlags.Ephemeral | COMPONENTS_V2_FLAG;
-const DISCORD_EPOCH = 1_420_070_400_000n;
-const PICKER_PAGE_SIZE = 10;
-
-type PickerKind = "start" | "queue" | "list" | "reroll";
+const PICKER_PAGE_SIZE = MAX_PICKER_GIVEAWAYS;
+const componentResponseInteractions = new WeakSet<object>();
 
 interface InteractionDependencies {
   client: Client;
   pool: Pool;
   logger: pino.Logger;
   botToken: string;
+  privacyHashSalt: string;
   websiteUrl: string;
 }
 
@@ -73,13 +92,12 @@ function memberRoleIds(
   return [];
 }
 
-async function isAuthorized(
+export async function isAuthorized(
   interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction,
   pool: Pool,
   command: string,
 ): Promise<boolean> {
   if (!interaction.guildId || !interaction.guild) return false;
-  if (interaction.guild.ownerId === interaction.user.id) return true;
   const member = interaction.member;
   if (member && "permissions" in member) {
     const bits =
@@ -95,7 +113,9 @@ async function isAuthorized(
     }
   }
   const allowed = await getAllowedRoleIds(pool, interaction.guildId, command);
-  return allowed.some((roleId) => memberRoleIds(member).includes(roleId));
+  if (allowed.some((roleId) => memberRoleIds(member).includes(roleId))) return true;
+  if (interaction.guild.ownerId !== interaction.user.id) return false;
+  return (await fetchCurrentGuildOwnerId(interaction.guild)) === interaction.user.id;
 }
 
 async function assertAuthorized(
@@ -154,17 +174,62 @@ async function buildPicker(
   ) as never;
 }
 
-async function replyNotice(
+export async function acknowledgeComponentReply(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
+  if (interaction.replied || interaction.deferred) return;
+  await interaction.reply({
+    components: simpleNotice("Working", "Checking the current giveaway state…") as never,
+    flags: EPHEMERAL_COMPONENT_FLAGS,
+  });
+  componentResponseInteractions.add(interaction);
+}
+
+async function deferComponentUpdate(interaction: ButtonInteraction): Promise<void> {
+  if (interaction.replied || interaction.deferred) return;
+  await interaction.deferUpdate();
+  componentResponseInteractions.add(interaction);
+}
+
+async function replaceComponents(
+  interaction: ChatInputCommandInteraction | ButtonInteraction,
+  components: never,
+): Promise<void> {
+  if (interaction.replied || interaction.deferred) {
+    await interaction.editReply({ components });
+    return;
+  }
+  if (interaction.isButton()) {
+    await interaction.update({ components });
+  } else {
+    await interaction.reply({ components, flags: EPHEMERAL_COMPONENT_FLAGS });
+    componentResponseInteractions.add(interaction);
+  }
+}
+
+export async function replyNotice(
   interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction,
   title: string,
   description: string,
   tone: "info" | "success" | "warning" | "danger" = "info",
 ): Promise<void> {
+  const components = simpleNotice(title, description, tone) as never;
+  if (componentResponseInteractions.has(interaction)) {
+    await interaction.editReply({ components });
+    return;
+  }
+  if (interaction.deferred) {
+    await interaction.editReply({
+      content: `**${title}**\n${description}`,
+      components: [],
+    });
+    return;
+  }
   const payload = {
-    components: simpleNotice(title, description, tone) as never,
+    components,
     flags: EPHEMERAL_COMPONENT_FLAGS,
   };
-  if (interaction.replied || interaction.deferred) {
+  if (interaction.replied) {
     await interaction.followUp(payload);
   } else {
     await interaction.reply(payload);
@@ -190,9 +255,7 @@ async function showRerollModal(
   interaction: ChatInputCommandInteraction | ButtonInteraction,
   giveaway: GiveawayRecord,
 ): Promise<void> {
-  if (giveaway.status !== "ended") {
-    throw new Error("Only ended giveaways can be rerolled.");
-  }
+  assertActionAllowed("reroll", giveaway.status);
   await interaction.showModal(rerollModal(giveaway));
 }
 
@@ -202,15 +265,14 @@ async function queueReroll(
   giveaway: GiveawayRecord,
   winnerCount: number,
 ): Promise<void> {
-  if (giveaway.status !== "ended") {
-    throw new Error("Only ended giveaways can be rerolled.");
-  }
+  assertActionAllowed("reroll", giveaway.status);
   await enqueueAction(
     dependencies.pool,
     "reroll_giveaway",
     giveaway,
     interaction.user.id,
     "discord",
+    dependencies.privacyHashSalt,
     winnerCount,
   );
   await replyNotice(
@@ -221,18 +283,28 @@ async function queueReroll(
   );
 }
 
-function validateRoles(
-  interaction: ChatInputCommandInteraction,
-  roleIds: string[],
-  label: string,
-): void {
-  if (!interaction.guild) throw new Error("This command can only be used in a server.");
-  for (const roleId of roleIds) {
-    const role = interaction.guild.roles.cache.get(roleId);
-    if (!role || role.id === interaction.guild.id) {
-      throw new Error(`${label} contains an unknown or invalid role: ${roleId}.`);
-    }
+async function commitDraft(
+  interaction: ChatInputCommandInteraction | ButtonInteraction,
+  dependencies: InteractionDependencies,
+  draft: DraftRecord,
+): Promise<GiveawayRecord> {
+  if (!interaction.guild || interaction.guildId !== draft.guildId) {
+    throw new Error("This draft must be completed in its original server.");
   }
+  await assertAuthorized(interaction, dependencies.pool, "create");
+  assertDraftPayloadShape(draft.payload);
+  if (!draftIsReady(draft.payload)) {
+    throw new Error("Requirement choices are incomplete.");
+  }
+  await assertDraftReferencesCurrent(interaction, draft.payload);
+  return createGiveawayFromDraft(
+    dependencies.pool,
+    draft.id,
+    interaction.user.id,
+    interaction.guild.name,
+    interaction.guild.icon,
+    dependencies.privacyHashSalt,
+  );
 }
 
 async function handleCreate(
@@ -240,6 +312,7 @@ async function handleCreate(
   dependencies: InteractionDependencies,
 ): Promise<void> {
   const { pool } = dependencies;
+  await acknowledgeComponentReply(interaction);
   await assertAuthorized(interaction, pool, "create");
   if (!interaction.guildId || !interaction.guild || !interaction.channelId) {
     throw new Error("Giveaways can only be created in a server channel.");
@@ -251,26 +324,8 @@ async function handleCreate(
   const requiredRoleIds = parseRoleIds(requiredRolesInput);
   const prizeRoleIds = parseRoleIds(prizeRolesInput);
   const bonusRoles = parseBonusRoles(bonusInput);
-  if (requiredRolesInput && requiredRoleIds.length === 0) {
-    throw new Error("No valid required role mentions or IDs were found.");
-  }
-  if (prizeRolesInput && prizeRoleIds.length === 0) {
-    throw new Error("No valid prize role mentions or IDs were found.");
-  }
-  validateRoles(interaction, requiredRoleIds, "Required roles");
-  assertPrizeRolesAwardable(interaction, prizeRoleIds);
-  validateRoles(
-    interaction,
-    bonusRoles.map((role) => role.roleId),
-    "Bonus roles",
-  );
-
   const channel = interaction.options.getChannel("channel");
   const channelId = channel?.id ?? interaction.channelId;
-  const resolvedChannel = interaction.guild.channels.cache.get(channelId);
-  if (!resolvedChannel?.isTextBased()) {
-    throw new Error("The giveaway channel must support messages.");
-  }
 
   const now = new Date();
   const scheduledStart = parseStart(interaction.options.getString("start"), now);
@@ -279,6 +334,7 @@ async function handleCreate(
     scheduledStart,
     now,
   );
+  const requiredMessages = interaction.options.getInteger("required_messages");
   const payload: DraftPayload = {
     prize: interaction.options.getString("prize", true),
     winnerCount: interaction.options.getInteger("winners", true),
@@ -289,32 +345,33 @@ async function handleCreate(
     requiredRoleIds,
     prizeRoleIds,
     bonusRoles,
-    requiredMessages: interaction.options.getInteger("required_messages"),
+    requiredMessages,
     requiredRoleMode: requiredRoleIds.length === 0 ? null : null,
-    messageScope:
-      interaction.options.getInteger("required_messages") === null ? null : null,
+    messageScope: requiredMessages === null ? null : null,
   };
-  const draft = await createDraft(pool, interaction.guildId, interaction.user.id, payload);
+  assertDraftPayloadShape(payload);
+  await assertDraftReferencesCurrent(interaction, payload);
+  const draft = await createDraft(
+    pool,
+    interaction.guildId,
+    interaction.user.id,
+    payload,
+    dependencies.privacyHashSalt,
+  );
 
   if (payload.requiredRoleIds.length > 0 || payload.requiredMessages !== null) {
-    await interaction.reply({
-      components: requirementDecisionComponents(
+    await replaceComponents(
+      interaction,
+      requirementDecisionComponents(
         draft.id,
         payload.requiredRoleIds.length > 0,
         payload.requiredMessages !== null,
       ) as never,
-      flags: EPHEMERAL_COMPONENT_FLAGS,
-    });
+    );
     return;
   }
 
-  const giveaway = await createGiveawayFromDraft(
-    pool,
-    draft.id,
-    interaction.user.id,
-    interaction.guild.name,
-    interaction.guild.icon,
-  );
+  const giveaway = await commitDraft(interaction, dependencies, draft);
   await replyNotice(
     interaction,
     giveaway.status === "queued" ? "Giveaway queued" : "Giveaway created",
@@ -326,108 +383,57 @@ async function handleCreate(
 async function handleDraftButton(
   interaction: ButtonInteraction,
   dependencies: InteractionDependencies,
-  parts: string[],
+  component: DraftComponentId,
 ): Promise<void> {
   const { pool } = dependencies;
-  const action = parts[1]!;
-  const value = parts[2]!;
-  const draftId = parts[3] ?? value;
-  const draft = await getDraft(pool, draftId);
+  await deferComponentUpdate(interaction);
+  const draft = await getDraft(pool, component.draftId);
   if (!draft || draft.creatorUserId !== interaction.user.id) {
     throw new Error("This draft expired or belongs to someone else.");
   }
 
-  if (action === "cancel") {
+  if (component.type === "cancel") {
     await cancelDraft(pool, draft.id, interaction.user.id);
-    await interaction.update({
-      components: simpleNotice("Draft cancelled", "No giveaway was created.", "warning") as never,
-    });
+    await replaceComponents(
+      interaction,
+      simpleNotice("Draft cancelled", "No giveaway was created.", "warning") as never,
+    );
     return;
   }
 
-  if (action === "roles") {
-    await updateDraftDecision(pool, draft.id, "requiredRoleMode", value as "all" | "one");
-  } else if (action === "messages") {
+  if (component.type === "roles") {
+    await updateDraftDecision(pool, draft.id, "requiredRoleMode", component.value);
+  } else if (component.type === "messages") {
     await updateDraftDecision(
       pool,
       draft.id,
       "messageScope",
-      value as "all_time" | "since_start",
+      component.value,
     );
-  } else if (action === "create") {
-    if (!interaction.guild || interaction.guildId !== draft.guildId) {
-      throw new Error("This draft must be completed in its original server.");
-    }
-    assertPrizeRolesAwardable(interaction, draft.payload.prizeRoleIds);
-    const giveaway = await createGiveawayFromDraft(
-      pool,
-      draft.id,
-      interaction.user.id,
-      interaction.guild.name,
-      interaction.guild.icon,
-    );
-    await interaction.update({
-      components: simpleNotice(
+  } else if (component.type === "create") {
+    const giveaway = await commitDraft(interaction, dependencies, draft);
+    await replaceComponents(
+      interaction,
+      simpleNotice(
         "Giveaway queued",
         `**${giveaway.prize}** will be posted <t:${Math.floor(giveaway.scheduledStartAt.getTime() / 1000)}:R>.`,
         "success",
       ) as never,
-    });
+    );
     return;
   }
 
   const updated = await getDraft(pool, draft.id);
   if (!updated) throw new Error("The draft could not be updated.");
-  await interaction.update({
-    components: draftIsReady(updated.payload)
+  await replaceComponents(
+    interaction,
+    draftIsReady(updated.payload)
       ? (draftReadyComponents(updated.id) as never)
       : (requirementDecisionComponents(
           updated.id,
           updated.payload.requiredRoleIds.length > 0,
           updated.payload.requiredMessages !== null,
         ) as never),
-  });
-}
-
-function timestampToSnowflake(timestamp: number): string {
-  return ((BigInt(timestamp) - DISCORD_EPOCH) << 22n).toString();
-}
-
-async function searchMessageCount(
-  botToken: string,
-  guildId: string,
-  userId: string,
-  since: Date | null,
-): Promise<number> {
-  const query = new URLSearchParams({ author_id: userId });
-  if (since) query.set("min_id", timestampToSnowflake(since.getTime()));
-  const url = `https://discord.com/api/v10/guilds/${guildId}/messages/search?${query.toString()}`;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const response = await fetch(url, {
-      headers: { Authorization: `Bot ${botToken}` },
-    });
-    const body = (await response.json()) as {
-      total_results?: number;
-      retry_after?: number;
-      message?: string;
-    };
-    if (response.status === 202 && body.retry_after) {
-      await new Promise((resolve) => setTimeout(resolve, Math.ceil(body.retry_after! * 1000)));
-      continue;
-    }
-    if (!response.ok) {
-      throw new Error(body.message ?? "Discord could not search this server's messages.");
-    }
-    return body.total_results ?? 0;
-  }
-  throw new Error("Discord is still indexing messages. Try joining again shortly.");
-}
-
-async function queueRefresh(pool: Pool, giveawayId: string): Promise<void> {
-  await pool.query(
-    `INSERT INTO jobs (id, type, giveaway_id, run_at)
-     VALUES ($1, 'refresh_giveaway', $2, now() + interval '2 seconds')`,
-    [randomUUID(), giveawayId],
   );
 }
 
@@ -439,7 +445,9 @@ async function performJoin(
   if (!interaction.guildId || !interaction.guild || !interaction.member) {
     throw new Error("This giveaway is no longer available in its server.");
   }
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  if (giveaway.status !== "active" || giveaway.endsAt.getTime() <= Date.now()) {
+    throw new Error("This giveaway is not active.");
+  }
   const roles = memberRoleIds(interaction.member);
   if (giveaway.requiredRoleIds.length > 0) {
     const checks = giveaway.requiredRoleIds.map((roleId) => roles.includes(roleId));
@@ -471,8 +479,7 @@ async function performJoin(
     username: interaction.user.username,
     globalName: interaction.user.globalName,
     avatar: interaction.user.avatar,
-  });
-  await queueRefresh(dependencies.pool, giveaway.id);
+  }, dependencies.privacyHashSalt);
   await interaction.editReply(
     result.joined
       ? `You entered **${giveaway.prize}**. There are now ${result.participantCount} participants.`
@@ -483,106 +490,111 @@ async function performJoin(
 async function handleGiveawayButton(
   interaction: ButtonInteraction,
   dependencies: InteractionDependencies,
-  parts: string[],
+  component: GiveawayComponentId,
 ): Promise<void> {
-  const action = parts[1]!;
-  if (action === "page") {
-    const kind = parts[2] as PickerKind;
-    const page = Number(parts[3]);
-    if (!["start", "queue", "list", "reroll"].includes(kind)) {
-      throw new Error("Unknown giveaway picker.");
-    }
-    if (!Number.isSafeInteger(page) || page < 0 || page > 100) {
-      throw new Error("Invalid giveaway page.");
-    }
-    if (!interaction.guildId) throw new Error("This picker requires a server.");
-    await assertAuthorized(interaction, dependencies.pool, kind);
-    await interaction.update({
-      components: await buildPicker(
+  if (!interaction.guildId) throw new Error("This giveaway action requires a server.");
+  if (component.type === "page") {
+    await deferComponentUpdate(interaction);
+    await assertAuthorized(interaction, dependencies.pool, component.kind);
+    await replaceComponents(
+      interaction,
+      await buildPicker(
         dependencies,
         interaction.guildId,
         interaction.user.id,
-        kind,
-        page,
+        component.kind,
+        component.page,
       ),
-    });
+    );
     return;
   }
-  if (action === "action") {
-    const command = parts[2] as "start" | "end" | "reroll" | "delete";
-    const giveawayId = parts[3]!;
-    await assertAuthorized(interaction, dependencies.pool, command);
-    const giveaway = await getGiveaway(dependencies.pool, giveawayId, interaction.guildId ?? undefined);
+  if (component.type === "action") {
+    if (component.action !== "reroll") {
+      await deferComponentUpdate(interaction);
+    }
+    await assertAuthorized(interaction, dependencies.pool, component.action);
+    const giveaway = await getGiveaway(
+      dependencies.pool,
+      component.giveawayId,
+      interaction.guildId,
+    );
     if (!giveaway) throw new Error("Giveaway not found.");
-    if (command === "reroll") {
+    assertActionAllowed(component.action, giveaway.status);
+    if (component.action === "reroll") {
       await showRerollModal(interaction, giveaway);
       return;
     }
     await enqueueAction(
       dependencies.pool,
-      `${command}_giveaway` as
-        | "start_giveaway"
-        | "end_giveaway"
-        | "reroll_giveaway"
-        | "delete_giveaway",
+      ACTION_JOB_TYPES[component.action],
       giveaway,
       interaction.user.id,
       "discord",
+      dependencies.privacyHashSalt,
     );
     await replyNotice(
       interaction,
       "Action queued",
-      `${command[0]!.toUpperCase()}${command.slice(1)} was queued for **${giveaway.prize}**.`,
+      `${component.action[0]!.toUpperCase()}${component.action.slice(1)} was queued for **${giveaway.prize}**.`,
       "success",
     );
     return;
   }
 
-  const giveawayId = parts[2]!;
-  const giveaway = await getGiveaway(dependencies.pool, giveawayId, interaction.guildId ?? undefined);
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const giveaway = await getGiveaway(
+    dependencies.pool,
+    component.giveawayId,
+    interaction.guildId,
+  );
   if (!giveaway) throw new Error("Giveaway not found.");
-  if (action === "join") {
+  if (component.type === "join") {
     await performJoin(interaction, dependencies, giveaway);
     return;
   }
-  if (action === "leave") {
-    const result = await leaveGiveaway(dependencies.pool, giveaway.id, interaction.user.id);
-    await queueRefresh(dependencies.pool, giveaway.id);
-    await replyNotice(
-      interaction,
-      result.left ? "Entry removed" : "Not entered",
-      result.left
-        ? `You left **${giveaway.prize}**. There are now ${result.participantCount} participants.`
-        : "You were not entered in this giveaway.",
-      result.left ? "success" : "warning",
-    );
-  }
+  const result = await leaveGiveaway(
+    dependencies.pool,
+    giveaway.id,
+    interaction.user.id,
+    dependencies.privacyHashSalt,
+  );
+  await replyNotice(
+    interaction,
+    result.left ? "Entry removed" : "Not entered",
+    result.left
+      ? `You left **${giveaway.prize}**. There are now ${result.participantCount} participants.`
+      : "You were not entered in this giveaway.",
+    result.left ? "success" : "warning",
+  );
 }
 
 async function handleManagementCommand(
   interaction: ChatInputCommandInteraction,
   dependencies: InteractionDependencies,
-  command: "start" | "end" | "reroll" | "delete",
+  command: ManagementAction,
 ): Promise<void> {
-  await assertAuthorized(interaction, dependencies.pool, command);
   if (!interaction.guildId) throw new Error("This command requires a server.");
   if (command === "reroll") {
     const supplied = interaction.options.getString("message_id");
     const optionCount = interaction.options.getInteger("winners");
+    if (!supplied || optionCount !== null) {
+      await acknowledgeComponentReply(interaction);
+    }
+    await assertAuthorized(interaction, dependencies.pool, command);
     if (!supplied) {
       if (optionCount !== null) {
         throw new Error("Provide a message ID with winners, or leave both blank to use the picker.");
       }
-      await interaction.reply({
-        components: await buildPicker(
+      await replaceComponents(
+        interaction,
+        await buildPicker(
           dependencies,
           interaction.guildId,
           interaction.user.id,
           "reroll",
           0,
         ),
-        flags: EPHEMERAL_COMPONENT_FLAGS,
-      });
+      );
       return;
     }
     const giveaway = await getGiveaway(dependencies.pool, supplied, interaction.guildId);
@@ -599,44 +611,35 @@ async function handleManagementCommand(
     );
     return;
   }
+  await acknowledgeComponentReply(interaction);
+  await assertAuthorized(interaction, dependencies.pool, command);
   const supplied =
     command === "start"
       ? interaction.options.getString("giveaway")
       : interaction.options.getString("message_id", true);
   if (!supplied && command === "start") {
-    await interaction.reply({
-      components: await buildPicker(
+    await replaceComponents(
+      interaction,
+      await buildPicker(
         dependencies,
         interaction.guildId,
         interaction.user.id,
         "start",
         0,
       ),
-      flags: EPHEMERAL_COMPONENT_FLAGS,
-    });
+    );
     return;
   }
   const giveaway = await getGiveaway(dependencies.pool, supplied!, interaction.guildId);
   if (!giveaway) throw new Error("No giveaway matched that message or giveaway ID.");
-  const validStatuses: Record<string, GiveawayRecord["status"][]> = {
-    start: ["queued"],
-    end: ["active"],
-    reroll: ["ended"],
-    delete: ["queued", "active", "ended", "error"],
-  };
-  if (!validStatuses[command]!.includes(giveaway.status)) {
-    throw new Error(`This giveaway cannot be ${command}ed while it is ${giveaway.status}.`);
-  }
+  assertActionAllowed(command, giveaway.status);
   await enqueueAction(
     dependencies.pool,
-    `${command}_giveaway` as
-      | "start_giveaway"
-      | "end_giveaway"
-      | "reroll_giveaway"
-      | "delete_giveaway",
+    ACTION_JOB_TYPES[command],
     giveaway,
     interaction.user.id,
     "discord",
+    dependencies.privacyHashSalt,
   );
   await replyNotice(
     interaction,
@@ -651,18 +654,19 @@ async function handleListCommand(
   dependencies: InteractionDependencies,
   kind: "queue" | "list",
 ): Promise<void> {
+  await acknowledgeComponentReply(interaction);
   await assertAuthorized(interaction, dependencies.pool, kind);
   if (!interaction.guildId) throw new Error("This command requires a server.");
-  await interaction.reply({
-    components: await buildPicker(
+  await replaceComponents(
+    interaction,
+    await buildPicker(
       dependencies,
       interaction.guildId,
       interaction.user.id,
       kind,
       0,
     ),
-    flags: EPHEMERAL_COMPONENT_FLAGS,
-  });
+  );
 }
 
 export async function handleChatInput(
@@ -680,11 +684,11 @@ export async function handleChatInput(
       await handleManagementCommand(
         interaction,
         dependencies,
-        subcommand as "start" | "end" | "reroll" | "delete",
+        parseManagementAction(subcommand),
       );
     }
   } catch (error) {
-    dependencies.logger.warn({ error, userId: interaction.user.id }, "interaction failed");
+    dependencies.logger.warn({ error, guildId: interaction.guildId }, "interaction failed");
     await replyNotice(interaction, "Could not complete action", errorMessage(error), "danger");
   }
 }
@@ -693,15 +697,24 @@ export async function handleButton(
   interaction: ButtonInteraction,
   dependencies: InteractionDependencies,
 ): Promise<void> {
-  const parts = interaction.customId.split(":");
   try {
-    if (parts[0] === "draft") {
-      await handleDraftButton(interaction, dependencies, parts);
-    } else if (parts[0] === "giveaway") {
-      await handleGiveawayButton(interaction, dependencies, parts);
+    if (interaction.customId.startsWith("draft:")) {
+      await handleDraftButton(
+        interaction,
+        dependencies,
+        parseDraftComponentId(interaction.customId),
+      );
+    } else if (interaction.customId.startsWith("giveaway:")) {
+      await handleGiveawayButton(
+        interaction,
+        dependencies,
+        parseGiveawayComponentId(interaction.customId),
+      );
+    } else {
+      throw new Error("Unknown component action.");
     }
   } catch (error) {
-    dependencies.logger.warn({ error, userId: interaction.user.id }, "button failed");
+    dependencies.logger.warn({ error, guildId: interaction.guildId }, "button failed");
     await replyNotice(interaction, "Could not complete action", errorMessage(error), "danger");
   }
 }
@@ -710,16 +723,14 @@ export async function handleModalSubmit(
   interaction: ModalSubmitInteraction,
   dependencies: InteractionDependencies,
 ): Promise<void> {
-  const parts = interaction.customId.split(":");
-  if (parts[0] !== "giveaway" || parts[1] !== "reroll") return;
   try {
-    if (parts.length !== 3 || !interaction.guildId) {
-      throw new Error("Invalid reroll request.");
-    }
+    const giveawayId = parseRerollModalId(interaction.customId);
+    if (!interaction.guildId) throw new Error("Invalid reroll request.");
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await assertAuthorized(interaction, dependencies.pool, "reroll");
     const giveaway = await getGiveaway(
       dependencies.pool,
-      parts[2]!,
+      giveawayId,
       interaction.guildId,
     );
     if (!giveaway) throw new Error("Giveaway not found.");
@@ -728,7 +739,7 @@ export async function handleModalSubmit(
     );
     await queueReroll(interaction, dependencies, giveaway, winnerCount);
   } catch (error) {
-    dependencies.logger.warn({ error, userId: interaction.user.id }, "modal failed");
+    dependencies.logger.warn({ error, guildId: interaction.guildId }, "modal failed");
     await replyNotice(interaction, "Could not complete action", errorMessage(error), "danger");
   }
 }
@@ -737,31 +748,40 @@ export async function handleAutocomplete(
   interaction: AutocompleteInteraction,
   dependencies: InteractionDependencies,
 ): Promise<void> {
-  if (interaction.commandName !== "giveaway" || interaction.options.getSubcommand() !== "start") {
-    return;
+  try {
+    if (
+      interaction.commandName !== "giveaway" ||
+      interaction.options.getSubcommand() !== "start"
+    ) {
+      return;
+    }
+    if (!interaction.guildId) {
+      await interaction.respond([]);
+      return;
+    }
+    const focused = interaction.options.getFocused().toLowerCase();
+    const queued = await listGiveaways(
+      dependencies.pool,
+      interaction.guildId,
+      ["queued"],
+      interaction.user.id,
+      25,
+    );
+    await interaction.respond(
+      queued
+        .filter(
+          (giveaway) =>
+            giveaway.prize.toLowerCase().includes(focused) ||
+            giveaway.id.includes(focused),
+        )
+        .slice(0, 25)
+        .map((giveaway) => ({
+          name: `${giveaway.prize.slice(0, 75)} • ${giveaway.id.slice(0, 8)}`,
+          value: giveaway.id,
+        })),
+    );
+  } catch (error) {
+    dependencies.logger.warn({ error }, "autocomplete failed");
+    if (!interaction.responded) await interaction.respond([]);
   }
-  if (!interaction.guildId) {
-    await interaction.respond([]);
-    return;
-  }
-  const focused = interaction.options.getFocused().toLowerCase();
-  const queued = await listGiveaways(
-    dependencies.pool,
-    interaction.guildId,
-    ["queued"],
-    interaction.user.id,
-    25,
-  );
-  await interaction.respond(
-    queued
-      .filter(
-        (giveaway) =>
-          giveaway.prize.toLowerCase().includes(focused) || giveaway.id.includes(focused),
-      )
-      .slice(0, 25)
-      .map((giveaway) => ({
-        name: `${giveaway.prize.slice(0, 75)} • ${giveaway.id.slice(0, 8)}`,
-        value: giveaway.id,
-      })),
-  );
 }

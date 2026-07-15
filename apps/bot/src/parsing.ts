@@ -1,3 +1,9 @@
+import {
+  MAX_TOTAL_BONUS_ENTRIES,
+  assertBonusEntriesFit,
+  assertDurationSeconds,
+} from "./limits.js";
+
 const UNIT_SECONDS: Record<string, number> = {
   s: 1,
   m: 60,
@@ -9,30 +15,87 @@ const UNIT_SECONDS: Record<string, number> = {
 };
 
 export function parseRoleIds(value: string | null): string[] {
-  if (!value) return [];
-  const matches = value.matchAll(/(?:<@&)?(\d{15,22})>?/g);
-  return [...new Set(Array.from(matches, (match) => match[1]!))];
+  if (value === null) return [];
+  const input = value.trim();
+  if (!input) throw new Error("A role list cannot be blank.");
+  const token = /(?:<@&(\d{15,22})>|(\d{15,22}))/y;
+  const roles: string[] = [];
+  let cursor = 0;
+  while (cursor < input.length) {
+    token.lastIndex = cursor;
+    const match = token.exec(input);
+    if (!match || match.index !== cursor) {
+      throw new Error(
+        "Use only complete role mentions or IDs separated by spaces or commas.",
+      );
+    }
+    roles.push(match[1] ?? match[2]!);
+    cursor = token.lastIndex;
+    if (cursor === input.length) break;
+    const separator = /^(?:\s*,\s*|\s+)/.exec(input.slice(cursor));
+    if (!separator) {
+      throw new Error(
+        "Use only complete role mentions or IDs separated by spaces or commas.",
+      );
+    }
+    cursor += separator[0].length;
+    if (cursor === input.length) {
+      throw new Error("A role list cannot end with a separator.");
+    }
+  }
+  return [...new Set(roles)];
 }
 
 export function parseBonusRoles(
   value: string | null,
 ): Array<{ roleId: string; bonusEntries: number }> {
-  if (!value) return [];
-  const normalized = value.replaceAll("<@&", "").replaceAll(">", "");
-  const pairs = normalized.matchAll(/(\d{15,22})\s*(?::|=|\+)\s*(\d+)/g);
+  if (value === null) return [];
+  const input = value.trim();
+  if (!input) throw new Error("A role bonus list cannot be blank.");
+  const pair = /(?:<@&(\d{15,22})>|(\d{15,22}))\s*(?::|=|\+)\s*(\d+)/y;
   const totals = new Map<string, number>();
-  for (const match of pairs) {
-    const roleId = match[1]!;
-    const bonus = Number(match[2]);
-    if (!Number.isSafeInteger(bonus) || bonus <= 0) {
-      throw new Error("Bonus entries must be positive integers.");
+  let cursor = 0;
+  while (cursor < input.length) {
+    pair.lastIndex = cursor;
+    const match = pair.exec(input);
+    if (!match || match.index !== cursor) {
+      throw new Error(
+        "Use only role:bonus pairs, for example @VIP:2, @Booster:5.",
+      );
     }
-    totals.set(roleId, (totals.get(roleId) ?? 0) + bonus);
+    const roleId = match[1] ?? match[2]!;
+    const bonus = Number(match[3]);
+    const combined = (totals.get(roleId) ?? 0) + bonus;
+    if (
+      !Number.isSafeInteger(bonus) ||
+      bonus <= 0 ||
+      !Number.isSafeInteger(combined) ||
+      combined > MAX_TOTAL_BONUS_ENTRIES
+    ) {
+      throw new Error(
+        `Role bonus entries must be between 1 and ${MAX_TOTAL_BONUS_ENTRIES.toLocaleString()}.`,
+      );
+    }
+    totals.set(roleId, combined);
+    cursor = pair.lastIndex;
+    if (cursor === input.length) break;
+    const separator = /^(?:\s*,\s*|\s+)/.exec(input.slice(cursor));
+    if (!separator) {
+      throw new Error(
+        "Use only role:bonus pairs, for example @VIP:2, @Booster:5.",
+      );
+    }
+    cursor += separator[0].length;
+    if (cursor === input.length) {
+      throw new Error("A role bonus list cannot end with a separator.");
+    }
   }
-  if (totals.size === 0) {
-    throw new Error("Use role:bonus pairs, for example @VIP:2, @Booster:5.");
-  }
-  return [...totals].map(([roleId, bonusEntries]) => ({ roleId, bonusEntries }));
+  const bonuses = [...totals].map(([roleId, bonusEntries]) => ({
+    roleId,
+    bonusEntries,
+  }));
+  assertBonusEntriesFit(bonuses);
+  return bonuses;
 }
 
 function parseRelativeSeconds(value: string): number {
@@ -69,7 +132,11 @@ export function parseStart(value: string | null, now = new Date()): Date {
     }
     return date;
   }
-  return new Date(now.getTime() + parseRelativeSeconds(trimmed) * 1000);
+  const date = new Date(now.getTime() + parseRelativeSeconds(trimmed) * 1000);
+  if (!Number.isFinite(date.getTime())) {
+    throw new Error("The start time is outside the supported timestamp range.");
+  }
+  return date;
 }
 
 export function parseDuration(
@@ -84,7 +151,10 @@ export function parseDuration(
     const anchor = scheduledStart > now ? scheduledStart : now;
     const seconds = Math.floor((milliseconds - anchor.getTime()) / 1000);
     if (seconds <= 0) throw new Error("The Unix end time must follow the start time.");
+    assertDurationSeconds(seconds);
     return seconds;
   }
-  return parseRelativeSeconds(trimmed);
+  const seconds = parseRelativeSeconds(trimmed);
+  assertDurationSeconds(seconds);
+  return seconds;
 }

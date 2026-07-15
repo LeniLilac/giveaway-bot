@@ -4,6 +4,7 @@ import {
   type RESTPostAPIApplicationCommandsJSONBody,
 } from "discord.js";
 import { MAX_REROLL_WINNERS } from "./reroll.js";
+import { MAX_REQUIRED_MESSAGES, MAX_WINNER_COUNT } from "./limits.js";
 
 export const commandData: RESTPostAPIApplicationCommandsJSONBody[] = [
   new SlashCommandBuilder()
@@ -20,7 +21,7 @@ export const commandData: RESTPostAPIApplicationCommandsJSONBody[] = [
         .addStringOption((option) =>
           option
             .setName("duration")
-            .setDescription("Examples: 2d3h, 1d 2h, or a Unix end time")
+            .setDescription("Examples: 2d3h, 1d 2h, or a Unix end time; maximum 1 year")
             .setMaxLength(100)
             .setRequired(true),
         )
@@ -29,6 +30,7 @@ export const commandData: RESTPostAPIApplicationCommandsJSONBody[] = [
             .setName("winners")
             .setDescription("Number of winners")
             .setMinValue(1)
+            .setMaxValue(MAX_WINNER_COUNT)
             .setRequired(true),
         )
         .addChannelOption((option) =>
@@ -46,7 +48,8 @@ export const commandData: RESTPostAPIApplicationCommandsJSONBody[] = [
           option
             .setName("required_messages")
             .setDescription("Messages a member must have sent")
-            .setMinValue(1),
+            .setMinValue(1)
+            .setMaxValue(MAX_REQUIRED_MESSAGES),
         )
         .addStringOption((option) =>
           option

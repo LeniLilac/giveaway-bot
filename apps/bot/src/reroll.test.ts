@@ -4,6 +4,7 @@ import {
   MAX_REROLL_WINNERS,
   parseRerollWinnerCount,
 } from "./reroll.js";
+import { MAX_REQUIRED_MESSAGES, MAX_WINNER_COUNT } from "./limits.js";
 
 describe("reroll winner count", () => {
   it("accepts positive integer strings and numbers", () => {
@@ -32,5 +33,20 @@ describe("reroll winner count", () => {
       .not.toBe(true);
     expect(reroll?.options?.find((option) => option.name === "winners")?.required)
       .not.toBe(true);
+  });
+
+  it("publishes exact downstream integer bounds on create options", () => {
+    const root = commandData[0] as {
+      options?: Array<{
+        name: string;
+        options?: Array<{ name: string; max_value?: number }>;
+      }>;
+    };
+    const create = root.options?.find((option) => option.name === "create");
+    expect(create?.options?.find((option) => option.name === "winners")?.max_value)
+      .toBe(MAX_WINNER_COUNT);
+    expect(
+      create?.options?.find((option) => option.name === "required_messages")?.max_value,
+    ).toBe(MAX_REQUIRED_MESSAGES);
   });
 });
