@@ -23,6 +23,7 @@ import {
   simpleNotice,
 } from "@lilac/discord-ui";
 import { parseBonusRoles, parseDuration, parseRoleIds, parseStart } from "./parsing.js";
+import { assertPrizeRolesAwardable } from "./prize-roles.js";
 import { parseRerollWinnerCount } from "./reroll.js";
 import {
   cancelDraft,
@@ -257,17 +258,12 @@ async function handleCreate(
     throw new Error("No valid prize role mentions or IDs were found.");
   }
   validateRoles(interaction, requiredRoleIds, "Required roles");
-  validateRoles(interaction, prizeRoleIds, "Prize roles");
+  assertPrizeRolesAwardable(interaction, prizeRoleIds);
   validateRoles(
     interaction,
     bonusRoles.map((role) => role.roleId),
     "Bonus roles",
   );
-  for (const roleId of prizeRoleIds) {
-    if (!interaction.guild.roles.cache.get(roleId)?.editable) {
-      throw new Error(`I cannot award <@&${roleId}>. Move my bot role above it.`);
-    }
-  }
 
   const channel = interaction.options.getChannel("channel");
   const channelId = channel?.id ?? interaction.channelId;
@@ -359,7 +355,10 @@ async function handleDraftButton(
       value as "all_time" | "since_start",
     );
   } else if (action === "create") {
-    if (!interaction.guild) throw new Error("The server is no longer available.");
+    if (!interaction.guild || interaction.guildId !== draft.guildId) {
+      throw new Error("This draft must be completed in its original server.");
+    }
+    assertPrizeRolesAwardable(interaction, draft.payload.prizeRoleIds);
     const giveaway = await createGiveawayFromDraft(
       pool,
       draft.id,

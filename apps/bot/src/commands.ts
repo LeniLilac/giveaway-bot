@@ -40,7 +40,7 @@ export const commandData: RESTPostAPIApplicationCommandsJSONBody[] = [
         .addStringOption((option) =>
           option
             .setName("role_prizes")
-            .setDescription("Roles awarded to winners, separated by spaces or commas"),
+            .setDescription("Prize roles you are allowed to manage, separated by spaces or commas"),
         )
         .addIntegerOption((option) =>
           option
