@@ -18,6 +18,7 @@ import {
   COMPONENTS_V2_FLAG,
   MAX_PICKER_GIVEAWAYS,
   draftReadyComponents,
+  giveawayListComponents,
   giveawayPickerComponents,
   requirementDecisionComponents,
   simpleNotice,
@@ -154,6 +155,15 @@ async function buildPicker(
     PICKER_PAGE_SIZE + 1,
     page * PICKER_PAGE_SIZE,
   );
+  const pagination = {
+    page,
+    pageAction: kind,
+    hasPrevious: page > 0,
+    hasNext: records.length > PICKER_PAGE_SIZE,
+  } as const;
+  if (kind === "list") {
+    return giveawayListComponents(guildId, records, pagination) as never;
+  }
   return giveawayPickerComponents(
     kind === "start"
       ? "Your queued giveaways"
@@ -165,12 +175,7 @@ async function buildPicker(
     records.slice(0, PICKER_PAGE_SIZE).map(asView),
     kind === "start" ? "start" : kind === "reroll" ? "reroll" : "view",
     dependencies.websiteUrl,
-    {
-      page,
-      pageAction: kind,
-      hasPrevious: page > 0,
-      hasNext: records.length > PICKER_PAGE_SIZE,
-    },
+    pagination,
   ) as never;
 }
 

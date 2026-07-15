@@ -42,6 +42,13 @@ export interface GiveawayView {
   bonusRoles: BonusRole[];
 }
 
+export interface GiveawayListItem {
+  channelId: string;
+  messageId: string | null;
+  prize: string;
+  endsAt: Date;
+}
+
 function text(content: string): ApiComponent {
   return { type: ComponentType.TextDisplay, content };
 }
@@ -212,6 +219,62 @@ export interface GiveawayPickerPagination {
   pageAction: "start" | "queue" | "list" | "reroll";
   hasPrevious: boolean;
   hasNext: boolean;
+}
+
+function escapeMarkdownLinkText(value: string): string {
+  return value
+    .replace(/[\r\n]+/g, " ")
+    .replace(/([\\`*_{}[\]()<>#+\-.!|~])/g, "\\$1")
+    .replace(/@/g, "@\u200b");
+}
+
+export function giveawayListComponents(
+  guildId: string,
+  giveaways: GiveawayListItem[],
+  pagination: GiveawayPickerPagination,
+): ApiComponent[] {
+  const visibleGiveaways = giveaways.slice(0, MAX_PICKER_GIVEAWAYS);
+  const firstNumber = pagination.page * MAX_PICKER_GIVEAWAYS + 1;
+  const description = visibleGiveaways.length === 0
+    ? "No active giveaways found on this page."
+    : visibleGiveaways
+        .map((giveaway, index) => {
+          const prize = escapeMarkdownLinkText(giveaway.prize);
+          const endTimestamp = Math.floor(giveaway.endsAt.getTime() / 1000);
+          const linkedPrize = giveaway.messageId
+            ? `[${prize}](https://discord.com/channels/${guildId}/${giveaway.channelId}/${giveaway.messageId})`
+            : prize;
+          return [
+            `\`${firstNumber + index}\`. ${linkedPrize} \u2014Ends at <t:${endTimestamp}:f> (<t:${endTimestamp}:R>)`,
+            `-# Message ID: ${giveaway.messageId ?? "Pending"}`,
+          ].join("\n");
+        })
+        .join("\n");
+
+  return [
+    container(
+      [
+        text(`### Active Giveaways\n${description}\n\n-# Page ${pagination.page + 1}`),
+        row(
+          button(
+            "Previous",
+            ButtonStyle.Secondary,
+            `giveaway:page:list:${Math.max(0, pagination.page - 1)}`,
+            undefined,
+            !pagination.hasPrevious,
+          ),
+          button(
+            "Next",
+            ButtonStyle.Secondary,
+            `giveaway:page:list:${pagination.page + 1}`,
+            undefined,
+            !pagination.hasNext,
+          ),
+        ),
+      ],
+      0x5865f2,
+    ),
+  ];
 }
 
 export function giveawayPickerComponents(
