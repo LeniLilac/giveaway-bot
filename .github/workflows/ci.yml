@@ -119,6 +119,9 @@ jobs:
           WEB_DATABASE_USER: giveaway_bot_web
           WORKER_DATABASE_PASSWORD: ci-worker-database-password-at-least-32-bytes
           WORKER_DATABASE_USER: giveaway_bot_worker
-        run: >-
-          docker compose --env-file .env.example build
-          migrate db-provision bot worker web
+        run: |
+          docker compose --env-file .env.example build \
+            migrate db-provision bot worker web
+          docker run --rm --read-only --user postgres --entrypoint sh \
+            giveaway-bot-db-provision \
+            -c 'test -x /usr/local/bin/provision-db-roles && test -r "$DATABASE_ROLES_SQL_PATH"'

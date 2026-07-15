@@ -40,8 +40,9 @@ USER node
 CMD ["node", "--import", "tsx", "packages/db/src/migrate.ts"]
 
 FROM postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3 AS db-provision
+RUN install -d --owner=postgres --group=postgres --mode=0750 /opt/lilac
 COPY --chmod=0555 ops/provision-db-roles.sh /usr/local/bin/provision-db-roles
-COPY --chmod=0444 ops/database-runtime-roles.sql /opt/lilac/database-runtime-roles.sql
+COPY --chown=postgres:postgres --chmod=0400 ops/database-runtime-roles.sql /opt/lilac/database-runtime-roles.sql
 # Make every migration change invalidate this image so grants are re-applied
 # before newly migrated tables can be reached by a runtime service.
 COPY --chmod=0444 db/migrations /opt/lilac/migrations
