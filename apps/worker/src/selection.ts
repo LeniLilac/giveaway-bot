@@ -4,6 +4,7 @@ import {
   selectWeightedWinners as selectWinners,
   type CanonicalCandidate,
   type ProofCandidate,
+  type ProofVersion,
 } from "@lilac/proof";
 
 export interface Candidate extends ProofCandidate {
@@ -11,12 +12,15 @@ export interface Candidate extends ProofCandidate {
   joinedAt: Date;
 }
 
-export function canonicalCandidates(candidates: Candidate[]): CanonicalCandidate[] {
-  return canonicalizeCandidates(candidates);
+export function canonicalCandidates(
+  candidates: Candidate[],
+  version?: ProofVersion,
+): CanonicalCandidate[] {
+  return canonicalizeCandidates(candidates, version);
 }
 
-export function candidateHash(candidates: Candidate[]): Promise<string> {
-  return hashCandidates(candidates);
+export function candidateHash(candidates: Candidate[], version?: ProofVersion): Promise<string> {
+  return hashCandidates(candidates, version);
 }
 
 export function selectWeightedWinners(
@@ -25,6 +29,14 @@ export function selectWeightedWinners(
   randomnessHex: string,
   snapshotHash: string,
   drawNumber: number,
+  version?: ProofVersion,
 ): Promise<Candidate[]> {
-  return selectWinners(candidates, winnerCount, randomnessHex, snapshotHash, drawNumber);
+  return selectWinners(
+    candidates,
+    winnerCount,
+    randomnessHex,
+    snapshotHash,
+    drawNumber,
+    version,
+  );
 }

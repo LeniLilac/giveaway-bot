@@ -1,18 +1,35 @@
-export const PROOF_SCHEMA = "lilac-giveaway-proof/v1";
-export const SNAPSHOT_SCHEMA = "lilac-giveaway-candidates/v1";
-export const DRAW_ALGORITHM = "lilac-weighted-v1";
+export const LEGACY_PROOF_VERSION = "lilac-weighted-v1" as const;
+export const PROOF_VERSION = "lilac-weighted-v2" as const;
+export const PROOF_SCHEMA = "lilac-giveaway-proof/v2";
+export const SNAPSHOT_SCHEMA = "lilac-giveaway-candidates/v2";
+export const DRAW_ALGORITHM = PROOF_VERSION;
+
+export type ProofVersion = typeof LEGACY_PROOF_VERSION | typeof PROOF_VERSION;
 
 export interface ProofCandidate {
+  /** Discord identity used only to preserve the historical v1 ordering contract. */
   userId: string;
+  /** Stable, non-reversible identity committed by v2 proofs. */
+  participantId: string;
+  /** Snapshot order assigned from joinedAt, then Discord user ID. */
+  ordinal: number;
   joinedAt: Date | string;
   weight: number;
 }
 
-export interface CanonicalCandidate {
+export interface CanonicalCandidateV1 {
   userId: string;
   joinedAt: string;
   weight: number;
 }
+
+export interface CanonicalCandidateV2 {
+  participantId: string;
+  joinedAt: string;
+  weight: number;
+}
+
+export type CanonicalCandidate = CanonicalCandidateV1 | CanonicalCandidateV2;
 
 function candidateTime(candidate: ProofCandidate): number {
   const value = new Date(candidate.joinedAt).getTime();
@@ -20,28 +37,67 @@ function candidateTime(candidate: ProofCandidate): number {
   return value;
 }
 
-function compareCandidates(left: ProofCandidate, right: ProofCandidate): number {
+function compareLegacyCandidates(left: ProofCandidate, right: ProofCandidate): number {
   const joined = candidateTime(left) - candidateTime(right);
   if (joined !== 0) return joined;
   return left.userId < right.userId ? -1 : left.userId > right.userId ? 1 : 0;
 }
 
-function validateCandidate(candidate: ProofCandidate): void {
+function compareV2Candidates(left: ProofCandidate, right: ProofCandidate): number {
+  return left.ordinal - right.ordinal;
+}
+
+function validateCandidate(candidate: ProofCandidate, version: ProofVersion): void {
   candidateTime(candidate);
+  if (!candidate.userId) throw new Error("Candidate user IDs must not be empty.");
+  if (version === PROOF_VERSION) {
+    if (!/^[a-f0-9]{64}$/i.test(candidate.participantId)) {
+      throw new Error("Participant IDs must be 32-byte hexadecimal values.");
+    }
+    if (!Number.isSafeInteger(candidate.ordinal) || candidate.ordinal < 0) {
+      throw new Error("Candidate ordinals must be non-negative safe integers.");
+    }
+  }
   if (!Number.isSafeInteger(candidate.weight) || candidate.weight <= 0) {
     throw new Error("Candidate weights must be positive safe integers.");
   }
 }
 
-export function canonicalCandidates(candidates: ProofCandidate[]): CanonicalCandidate[] {
-  return [...candidates].sort(compareCandidates).map((candidate) => {
-    validateCandidate(candidate);
-    return {
-      userId: candidate.userId,
-      joinedAt: new Date(candidate.joinedAt).toISOString(),
-      weight: candidate.weight,
-    };
-  });
+function orderedCandidates(
+  candidates: ProofCandidate[],
+  version: ProofVersion,
+): ProofCandidate[] {
+  const ordered = [...candidates].sort(
+    version === LEGACY_PROOF_VERSION ? compareLegacyCandidates : compareV2Candidates,
+  );
+  ordered.forEach((candidate) => validateCandidate(candidate, version));
+  if (version === PROOF_VERSION) {
+    ordered.forEach((candidate, index) => {
+      if (candidate.ordinal !== index) {
+        throw new Error("V2 candidate ordinals must be contiguous from zero.");
+      }
+    });
+  }
+  return ordered;
+}
+
+export function canonicalCandidates(
+  candidates: ProofCandidate[],
+  version: ProofVersion = PROOF_VERSION,
+): CanonicalCandidate[] {
+  return orderedCandidates(candidates, version).map((candidate) =>
+    version === LEGACY_PROOF_VERSION
+      ? {
+          userId: candidate.userId,
+          joinedAt: new Date(candidate.joinedAt).toISOString(),
+          weight: candidate.weight,
+        }
+      : {
+          participantId: candidate.participantId.toLowerCase(),
+          joinedAt: new Date(candidate.joinedAt).toISOString(),
+          weight: candidate.weight,
+        },
+  );
 }
 
 function concat(...parts: Uint8Array[]): Uint8Array {
@@ -87,8 +143,11 @@ export async function sha256(value: Uint8Array | string): Promise<Uint8Array> {
   return new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", copy.buffer));
 }
 
-export async function candidateHash(candidates: ProofCandidate[]): Promise<string> {
-  return bytesToHex(await sha256(JSON.stringify(canonicalCandidates(candidates))));
+export async function candidateHash(
+  candidates: ProofCandidate[],
+  version: ProofVersion = PROOF_VERSION,
+): Promise<string> {
+  return bytesToHex(await sha256(JSON.stringify(canonicalCandidates(candidates, version))));
 }
 
 async function randomBelow(
@@ -112,6 +171,7 @@ export async function selectWeightedWinners<T extends ProofCandidate>(
   randomnessHex: string,
   snapshotHash: string,
   drawNumber: number,
+  version: ProofVersion = PROOF_VERSION,
 ): Promise<T[]> {
   if (!Number.isSafeInteger(winnerCount) || winnerCount < 0) {
     throw new Error("Winner count must be a non-negative safe integer.");
@@ -122,8 +182,7 @@ export async function selectWeightedWinners<T extends ProofCandidate>(
   if (!/^[a-fA-F0-9]{64}$/.test(randomnessHex) || !/^[a-fA-F0-9]{64}$/.test(snapshotHash)) {
     throw new Error("Randomness and snapshot hash must be 32-byte hexadecimal values.");
   }
-  const pool = [...candidates].sort(compareCandidates);
-  pool.forEach(validateCandidate);
+  const pool = orderedCandidates(candidates, version) as T[];
   const seed = await sha256(
     concat(
       hexToBytes(randomnessHex),

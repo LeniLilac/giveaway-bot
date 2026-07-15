@@ -7,17 +7,15 @@ import {
 } from "./selection.js";
 
 const candidates: Candidate[] = [
-  { userId: "3", username: "three", joinedAt: new Date("2026-01-01T00:00:02Z"), weight: 1 },
-  { userId: "2", username: "two", joinedAt: new Date("2026-01-01T00:00:01Z"), weight: 4 },
-  { userId: "1", username: "one", joinedAt: new Date("2026-01-01T00:00:01Z"), weight: 2 },
+  { userId: "1", participantId: "1".repeat(64), ordinal: 0, username: "one", joinedAt: new Date("2026-01-01T00:00:01Z"), weight: 2 },
+  { userId: "2", participantId: "2".repeat(64), ordinal: 1, username: "two", joinedAt: new Date("2026-01-01T00:00:01Z"), weight: 4 },
+  { userId: "3", participantId: "3".repeat(64), ordinal: 2, username: "three", joinedAt: new Date("2026-01-01T00:00:02Z"), weight: 1 },
 ];
 
 describe("public draw selection", () => {
   it("canonicalizes by join time and then user ID", () => {
-    expect(canonicalCandidates(candidates).map((candidate) => candidate.userId)).toEqual([
-      "1",
-      "2",
-      "3",
+    expect(canonicalCandidates(candidates).map((candidate) => "participantId" in candidate ? candidate.participantId[0] : "")).toEqual([
+      "1", "2", "3",
     ]);
   });
 

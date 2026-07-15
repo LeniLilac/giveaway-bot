@@ -1,7 +1,10 @@
-# Public draw proof, `lilac-weighted-v1`
+# Public draw proof, `lilac-weighted-v2`
 
-This document is normative for proof version `lilac-weighted-v1`.
-The portable implementation in `packages/proof` is the single selection implementation used by the worker.
+This document is normative for new draws using proof version
+`lilac-weighted-v2`. The portable implementation in `packages/proof` is the
+single selection implementation used by the worker. Draws created before the
+v2 migration retain `lilac-weighted-v1`; their compatibility rules are in
+section 8.
 
 ## 1. Eligibility snapshot
 
@@ -12,46 +15,90 @@ At giveaway end, active entries are evaluated again:
 3. Required roles use the recorded `all` or `one` mode.
 4. On a reroll, every winner from every prior completed draw is excluded.
 5. Entries joined after the persisted closure timestamp are excluded.
-6. Weight equals one plus every matching role bonus.
+6. Weight equals one plus every matching role bonus and must remain a positive
+   JavaScript safe integer.
 
-Message-count requirements are admission requirements and are checked when joining. Role requirements are checked both at admission and draw time.
+Message-count and role requirements are checked both at admission and when the
+draw snapshot is prepared. A `since_start` message requirement uses the
+persisted actual start time, not the originally scheduled time; a failed or
+inconclusive Discord search aborts the whole snapshot.
 
-## 2. Canonical candidates
+## 2. Private-to-public participant identity
 
-Eligible candidates are sorted by:
+For each giveaway, Lilac derives a stable, non-reversible participant identity:
+
+```text
+participant_id = lowercase_hex(HMAC-SHA256(
+  privacy_secret,
+  UTF8("lilac-proof-id/v2:" || giveaway_id || ":" || discord_user_id)
+))
+```
+
+The secret and Discord ID are not proof inputs exposed publicly. The resulting
+`participantId` is. Scoping by giveaway prevents public cross-giveaway
+correlation while keeping reroll exclusion stable within one giveaway.
+
+## 3. Canonical candidates
+
+Entries are initially ordered by:
 
 1. `joinedAt` ascending
-2. `userId` ascending by Unicode string comparison when join times are equal
+2. Discord user ID ascending by Unicode string comparison when join times tie
 
-Each candidate becomes an object whose keys are inserted in this exact order:
+The worker stores this as a contiguous ordinal beginning at zero. Public v2
+verification orders records by ordinal and verifies that the sequence is
+contiguous. Each record then becomes an object whose keys are inserted in this
+exact order:
 
 ```json
-{"userId":"123","joinedAt":"2026-07-10T12:34:56.789Z","weight":3}
+{"participantId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","joinedAt":"2026-01-01T00:00:01.000Z","weight":2}
 ```
 
-The canonical snapshot is `JSON.stringify` of the resulting array with no extra whitespace. `candidate_hash` is lowercase hexadecimal SHA-256 of the UTF-8 snapshot.
+The ordinal is ordering metadata and is not serialized into the snapshot.
+The canonical snapshot is `JSON.stringify` of the array with no extra
+whitespace. `candidate_hash` is lowercase hexadecimal SHA-256 of its UTF-8
+bytes. The database prevents canonical fields from being updated afterward.
 
-## 3. Future drand commitment
-
-Lilac fetches the configured chain information and chooses the first Quicknet round at or after 15 seconds in the future:
+The fixed three-candidate fixture in `packages/proof/src/index.test.ts` has
+snapshot hash:
 
 ```text
-round = floor((target_unix_seconds - genesis_time) / period) + 1
+904749d51e1de2dc15a0a21867a03e532096edb596d96257efa33001e9edadfc
 ```
 
-The candidate hash, chain hash, round, and expected beacon time are persisted and posted before the beacon is available.
+With randomness `ab` repeated 32 times, draw number 1, and weights 2, 4, 1,
+the winner participant prefixes are `b`, `c`, `a`.
 
-For Quicknet's unchained scheme, Lilac confirms:
+## 4. Future, authenticated drand commitment
+
+Lilac pins the drand chain hash, public key, period, genesis time, and signature
+scheme outside the relay. Relay `/info` data must match every pinned value.
+Every beacon is BLS-verified with the official maintained drand client, and the
+worker additionally confirms `randomness = SHA256(signature_bytes)`.
+
+For target Unix time `target`, the first round whose emission is not earlier
+than the target is:
 
 ```text
-randomness = lowercase_hex(SHA256(signature_bytes))
+round = ceil((target - genesis_time) / period) + 1
+round_time = genesis_time + (round - 1) * period
 ```
 
-Independent verifiers should additionally verify the BLS signature against the chain public key.
+Round 1 is used when the target is at or before genesis. Candidate rows are
+inserted in batches, and the transaction uses PostgreSQL `clock_timestamp()` to
+verify immediately before commit that the beacon remains at least 15 seconds
+in the future. Lilac normally chooses a 60-second publication cushion. A draw
+cannot complete until Discord publication succeeds and a second database-clock
+guard confirms at least 15 seconds remain. If publication is delayed, the
+unpublished draw is moved to a later round before it can complete.
 
-## 4. Seed
+Completion fetches the draw's committed chain, not whatever chain happens to be
+configured later. A configuration mismatch fails closed.
 
-Decode `drand_randomness` and `candidate_hash` from hexadecimal. Let `draw_number_utf8` be the decimal draw number with no padding.
+## 5. Seed
+
+Decode `drand_randomness` and `candidate_hash` from hexadecimal. Let
+`draw_number_utf8` be the decimal draw number with no padding.
 
 ```text
 seed = SHA256(
@@ -61,42 +108,46 @@ seed = SHA256(
 )
 ```
 
-## 5. Unbiased weighted selection
-
-Every draw stores an immutable positive requested winner count before its future
-drand round is committed. The first draw uses the giveaway's configured count;
-each reroll uses the count supplied for that reroll.
+## 6. Unbiased weighted selection
 
 Selection is without replacement. For winner index `i` starting at zero:
 
 ```text
-digest = SHA256(
-  seed ||
-  uint64_be_hex(i) ||
-  uint32_be_hex(attempt)
-)
+digest = SHA256(seed || uint64_be(i) || uint32_be(attempt))
 ```
 
-Interpret `digest` as an unsigned 256-bit big-endian integer `value`. Let `total` be the sum of remaining weights and:
+Interpret `digest` as an unsigned 256-bit big-endian integer `value`. Let
+`total` be the sum of remaining weights and:
 
 ```text
 range = 2^256
 ceiling = range - (range mod total)
 ```
 
-If `value >= ceiling`, increment `attempt` and hash again. Otherwise `target = value mod total`. Walk candidates in canonical order, subtracting weights until `target` lies inside a candidate's weight interval. Select and remove that candidate. Repeat until the requested winner count or candidate set is exhausted.
+If `value >= ceiling`, increment `attempt` and hash again. Otherwise set
+`target = value mod total`. Walk candidates in canonical order, subtracting
+weights until `target` lies inside a candidate's interval. Select and remove
+that candidate. Repeat until the requested winner count or candidate set is
+exhausted. Rejection sampling prevents modulo bias.
 
-This rejection step prevents modulo bias.
+## 7. Rerolls and privacy
 
-## 6. Rerolls
+A reroll creates a numbered draw and a new future drand commitment. It uses the
+current entry and role state but excludes proof identities from every prior
+completed draw. Privacy deletion may redact `user_id`, usernames, and profile
+fields, but it never changes v2 `proof_id`, candidate order, join time, weight,
+or candidate hash. Therefore a deleted prior winner remains excluded and the
+published v2 snapshot remains independently reproducible.
 
-A reroll creates a new numbered draw and new future drand commitment. It uses the current active entries and role state, but excludes all user IDs found in any prior completed draw for the giveaway.
+## 8. Legacy v1 compatibility
 
-A reroll succeeds only when its committed candidate set contains at least the
-requested number of fresh winners. If fewer eligible non-winners remain, Lilac
-records a `reroll_rejected` audit event and does not create a draw, commit a
-drand round, change the current winner set, or mutate prize-role claims.
+`lilac-weighted-v1` serialized `{userId, joinedAt, weight}` and ordered tied
+join times by `userId`. Existing rows retain this version and the worker uses
+the v1 canonicalizer and selector when completing an in-flight legacy draw.
+Privacy deletion is deferred while such a draw is awaiting its beacon.
 
-## 7. Redaction
-
-A privacy deletion may replace a Discord user ID and profile snapshot with a `deleted:...` pseudonym. The original candidate hash remains as the historical commitment. The public API indicates the redacted candidate record; a verifier should treat the pre-redaction candidate hash as externally committed historical evidence.
+Once a v1 draw is complete, deletion may redact its canonical Discord ID. The
+draw is then marked with `proof_redacted_at` and public consumers must report it
+as `redacted_unverifiable`; they must not claim its post-redaction candidate
+list reproduces the old hash. A stable scoped proof ID is retained for reroll
+exclusion, but it does not retroactively change the v1 commitment.
