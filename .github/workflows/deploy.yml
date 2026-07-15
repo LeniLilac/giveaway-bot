@@ -5,7 +5,6 @@ on:
     workflows: ["CI"]
     branches: [main]
     types: [completed]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,14 +15,20 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - name: Configure SSH
         shell: bash
@@ -31,15 +36,38 @@ jobs:
           install -d -m 0700 ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/giveaway_bot
           chmod 0600 ~/.ssh/giveaway_bot
-          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 0600 ~/.ssh/known_hosts
+          ssh-keygen -F "$VPS_HOST" -f ~/.ssh/known_hosts >/dev/null
       - name: Deploy production
         shell: bash
         run: |
-          TOKEN_B64="$(printf '%s' "$DOPPLER_TOKEN" | base64 -w 0)"
-          ssh -i ~/.ssh/giveaway_bot "$VPS_USER@$VPS_HOST" \
-            "export DOPPLER_TOKEN=\$(printf '%s' '$TOKEN_B64' | base64 -d); \
-             export GITHUB_REPOSITORY='LeniLilac/giveaway-bot'; \
-             if [ ! -d /opt/giveaway-bot/.git ]; then \
-               git clone https://github.com/LeniLilac/giveaway-bot.git /opt/giveaway-bot; \
-             fi; \
-             bash /opt/giveaway-bot/ops/deploy.sh"
+          if [[ ! "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "DEPLOY_SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          printf '%s\n' "$DOPPLER_TOKEN" | \
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+              -i ~/.ssh/giveaway_bot "$VPS_USER@$VPS_HOST" \
+              "set -euo pipefail; \
+               IFS= read -r DOPPLER_TOKEN; export DOPPLER_TOKEN; \
+               DEPLOY_SHA='$DEPLOY_SHA'; DEPLOY_PATH=/opt/giveaway-bot; \
+               if [ ! -d \"\$DEPLOY_PATH/.git\" ]; then \
+                 git clone https://github.com/${GITHUB_REPOSITORY}.git \"\$DEPLOY_PATH\"; \
+               fi; \
+               git -C \"\$DEPLOY_PATH\" fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main; \
+               git -C \"\$DEPLOY_PATH\" merge-base --is-ancestor \"\$DEPLOY_SHA\" origin/main; \
+               if [ -n \"\$(git -C \"\$DEPLOY_PATH\" status --porcelain --untracked-files=normal)\" ]; then \
+                 echo \"Refusing to deploy with a dirty production worktree.\" >&2; \
+                 exit 1; \
+               fi; \
+               CURRENT_SHA=\$(git -C \"\$DEPLOY_PATH\" rev-parse HEAD); \
+               if [ \"\$CURRENT_SHA\" != \"\$DEPLOY_SHA\" ] && \
+                  git -C \"\$DEPLOY_PATH\" merge-base --is-ancestor \"\$DEPLOY_SHA\" \"\$CURRENT_SHA\" && \
+                  git -C \"\$DEPLOY_PATH\" merge-base --is-ancestor \"\$CURRENT_SHA\" origin/main; then \
+                 echo \"Skipping stale deploy \$DEPLOY_SHA; production is already at \$CURRENT_SHA.\"; \
+                 exit 0; \
+               fi; \
+               git -C \"\$DEPLOY_PATH\" show \"\${DEPLOY_SHA}:ops/deploy.sh\" | \
+                 DEPLOY_SHA=\"\$DEPLOY_SHA\" GITHUB_REPOSITORY='${GITHUB_REPOSITORY}' \
+                 bash -s"

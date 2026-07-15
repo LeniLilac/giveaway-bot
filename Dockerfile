@@ -1,7 +1,9 @@
-FROM node:24-bookworm-slim AS workspace
+FROM node:24.13.1-bookworm-slim@sha256:a81a03dd965b4052269a57fac857004022b522a4bf06e7a739e25e18bce45af2 AS workspace
 
 WORKDIR /app
-ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NPM_CONFIG_CACHE=/tmp/npm \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
 
 COPY package.json package-lock.json ./
 COPY apps/bot/package.json apps/bot/package.json
@@ -24,19 +26,33 @@ RUN npm run build -w @lilac/config \
 
 FROM workspace AS bot
 ENV NODE_ENV=production
-CMD ["npm", "run", "start", "-w", "@lilac/bot"]
+USER node
+CMD ["node", "--import", "tsx", "apps/bot/src/index.ts"]
 
 FROM workspace AS worker
 ENV NODE_ENV=production
-CMD ["npm", "run", "start", "-w", "@lilac/worker"]
+USER node
+CMD ["node", "--import", "tsx", "apps/worker/src/index.ts"]
 
 FROM workspace AS migrate
 ENV NODE_ENV=production
-CMD ["npm", "run", "migrate", "-w", "@lilac/db"]
+USER node
+CMD ["node", "--import", "tsx", "packages/db/src/migrate.ts"]
+
+FROM postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3 AS db-provision
+COPY --chmod=0555 ops/provision-db-roles.sh /usr/local/bin/provision-db-roles
+COPY --chmod=0444 ops/database-runtime-roles.sql /opt/lilac/database-runtime-roles.sql
+# Make every migration change invalidate this image so grants are re-applied
+# before newly migrated tables can be reached by a runtime service.
+COPY --chmod=0444 db/migrations /opt/lilac/migrations
+ENV DATABASE_ROLES_SQL_PATH=/opt/lilac/database-runtime-roles.sql
+USER postgres
+ENTRYPOINT ["/usr/local/bin/provision-db-roles"]
 
 FROM workspace AS web-build
 RUN npm run build -w @lilac/web
 
 FROM web-build AS web
 ENV NODE_ENV=production
-CMD ["npm", "run", "start", "-w", "@lilac/web"]
+USER node
+CMD ["node", "node_modules/next/dist/bin/next", "start", "apps/web"]

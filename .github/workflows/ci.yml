@@ -11,14 +11,114 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/giveaway_bot_test
+    services:
+      postgres:
+        image: postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
+        env:
+          POSTGRES_DB: giveaway_bot_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d giveaway_bot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: 24
+          node-version: 24.13.1
           cache: npm
+      - name: Validate operations scripts and Compose interpolation
+        shell: bash
+        env:
+          BOT_DATABASE_PASSWORD: ci-bot-database-password-at-least-32-bytes
+          BOT_DATABASE_USER: giveaway_bot_bot
+          DISCORD_APPLICATION_ID: "123456789012345678"
+          DISCORD_CLIENT_SECRET: ci-discord-client-secret
+          DISCORD_TOKEN: ci-discord-token
+          OAUTH_ENCRYPTION_KEY: ci-oauth-encryption-key-at-least-32-bytes
+          POSTGRES_DB: giveaway_bot
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_USER: giveaway_bot
+          PRIVACY_HASH_SALT: ci-privacy-hash-salt-at-least-32-bytes
+          PUBLIC_BASE_URL: https://giveaway.example.test
+          SESSION_SECRET: ci-session-secret-at-least-32-bytes
+          WEB_DATABASE_PASSWORD: ci-web-database-password-at-least-32-bytes
+          WEB_DATABASE_USER: giveaway_bot_web
+          WORKER_DATABASE_PASSWORD: ci-worker-database-password-at-least-32-bytes
+          WORKER_DATABASE_USER: giveaway_bot_worker
+        run: |
+          for script in ops/*.sh; do
+            bash -n "$script"
+          done
+          node --check ops/dev.mjs
+          docker compose --env-file .env.example config --quiet
+      - name: Validate PowerShell operations scripts
+        shell: pwsh
+        run: |
+          Get-ChildItem ops -Filter *.ps1 | ForEach-Object {
+            [void][scriptblock]::Create((Get-Content -Raw $_.FullName))
+          }
       - run: npm ci
+      - run: npm audit --audit-level=moderate
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      - run: npm run test:integration
+      - name: Validate least-privilege database roles
+        shell: bash
+        env:
+          BOT_DATABASE_PASSWORD: ci-bot-database-password-at-least-32-bytes
+          BOT_DATABASE_USER: giveaway_bot_bot
+          PGDATABASE: giveaway_bot_test
+          PGHOST: 127.0.0.1
+          PGPASSWORD: postgres
+          PGPORT: "5432"
+          PGUSER: postgres
+          WEB_DATABASE_PASSWORD: ci-web-database-password-at-least-32-bytes
+          WEB_DATABASE_USER: giveaway_bot_web
+          WORKER_DATABASE_PASSWORD: ci-worker-database-password-at-least-32-bytes
+          WORKER_DATABASE_USER: giveaway_bot_worker
+        run: |
+          image='postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3'
+          docker run --rm --network host --volume "$PWD:/workspace:ro" \
+            --env PGDATABASE --env PGHOST --env PGPASSWORD --env PGPORT --env PGUSER \
+            --env BOT_DATABASE_USER --env BOT_DATABASE_PASSWORD \
+            --env WORKER_DATABASE_USER --env WORKER_DATABASE_PASSWORD \
+            --env WEB_DATABASE_USER --env WEB_DATABASE_PASSWORD \
+            --env DATABASE_ROLES_SQL_PATH=/workspace/ops/database-runtime-roles.sql \
+            "$image" /workspace/ops/provision-db-roles.sh
+          docker run --rm --network host --volume "$PWD:/workspace:ro" \
+            --env PGDATABASE --env PGHOST --env PGPASSWORD --env PGPORT --env PGUSER \
+            --env BOT_DATABASE_USER --env WORKER_DATABASE_USER --env WEB_DATABASE_USER \
+            "$image" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+              --file=/workspace/ops/database-runtime-roles.test.sql
       - run: npm run build -w @lilac/web
+      - name: Build every production container target
+        shell: bash
+        env:
+          BOT_DATABASE_PASSWORD: ci-bot-database-password-at-least-32-bytes
+          BOT_DATABASE_USER: giveaway_bot_bot
+          DISCORD_APPLICATION_ID: "123456789012345678"
+          DISCORD_CLIENT_SECRET: ci-discord-client-secret
+          DISCORD_TOKEN: ci-discord-token
+          OAUTH_ENCRYPTION_KEY: ci-oauth-encryption-key-at-least-32-bytes
+          POSTGRES_DB: giveaway_bot
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_USER: giveaway_bot
+          PRIVACY_HASH_SALT: ci-privacy-hash-salt-at-least-32-bytes
+          PUBLIC_BASE_URL: https://giveaway.example.test
+          SESSION_SECRET: ci-session-secret-at-least-32-bytes
+          WEB_DATABASE_PASSWORD: ci-web-database-password-at-least-32-bytes
+          WEB_DATABASE_USER: giveaway_bot_web
+          WORKER_DATABASE_PASSWORD: ci-worker-database-password-at-least-32-bytes
+          WORKER_DATABASE_USER: giveaway_bot_worker
+        run: >-
+          docker compose --env-file .env.example build
+          migrate db-provision bot worker web

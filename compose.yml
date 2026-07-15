@@ -1,13 +1,32 @@
 name: giveaway-bot
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app-hardening: &app-hardening
+  init: true
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  pids_limit: 128
+  stop_grace_period: 30s
+  logging: *default-logging
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+
 services:
   postgres:
-    image: postgres:17.6-bookworm
+    image: postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -15,36 +34,79 @@ services:
       retries: 20
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    shm_size: 128m
+    stop_grace_period: 60s
+    logging: *default-logging
     networks:
       - internal
 
   migrate:
+    <<: *app-hardening
     build:
       context: .
       target: migrate
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:?POSTGRES_DB is required}
+      PGUSER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     depends_on:
       postgres:
         condition: service_healthy
     restart: "no"
+    pids_limit: 64
+    mem_limit: 512m
+    networks:
+      - internal
+
+  db-provision:
+    <<: *app-hardening
+    build:
+      context: .
+      target: db-provision
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:?POSTGRES_DB is required}
+      PGUSER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      BOT_DATABASE_USER: ${BOT_DATABASE_USER:?BOT_DATABASE_USER is required}
+      BOT_DATABASE_PASSWORD: ${BOT_DATABASE_PASSWORD:?BOT_DATABASE_PASSWORD is required}
+      WORKER_DATABASE_USER: ${WORKER_DATABASE_USER:?WORKER_DATABASE_USER is required}
+      WORKER_DATABASE_PASSWORD: ${WORKER_DATABASE_PASSWORD:?WORKER_DATABASE_PASSWORD is required}
+      WEB_DATABASE_USER: ${WEB_DATABASE_USER:?WEB_DATABASE_USER is required}
+      WEB_DATABASE_PASSWORD: ${WEB_DATABASE_PASSWORD:?WEB_DATABASE_PASSWORD is required}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+    pids_limit: 64
+    mem_limit: 256m
     networks:
       - internal
 
   bot:
+    <<: *app-hardening
     build:
       context: .
       target: bot
     restart: unless-stopped
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      DISCORD_TOKEN: ${DISCORD_TOKEN}
-      DISCORD_APPLICATION_ID: ${DISCORD_APPLICATION_ID}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:?POSTGRES_DB is required}
+      PGUSER: ${BOT_DATABASE_USER:?BOT_DATABASE_USER is required}
+      PGPASSWORD: ${BOT_DATABASE_PASSWORD:?BOT_DATABASE_PASSWORD is required}
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?DISCORD_TOKEN is required}
+      DISCORD_APPLICATION_ID: ${DISCORD_APPLICATION_ID:?DISCORD_APPLICATION_ID is required}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+      PRIVACY_HASH_SALT: ${PRIVACY_HASH_SALT:?PRIVACY_HASH_SALT is required}
       HEALTH_PORT: "3001"
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
-      migrate:
+      db-provision:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -57,25 +119,34 @@ services:
       interval: 20s
       timeout: 5s
       retries: 5
+    mem_limit: 768m
     networks:
       - internal
 
   worker:
+    <<: *app-hardening
     build:
       context: .
       target: worker
     restart: unless-stopped
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      DISCORD_TOKEN: ${DISCORD_TOKEN}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
-      DRAND_CHAIN_HASH: ${DRAND_CHAIN_HASH}
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:?POSTGRES_DB is required}
+      PGUSER: ${WORKER_DATABASE_USER:?WORKER_DATABASE_USER is required}
+      PGPASSWORD: ${WORKER_DATABASE_PASSWORD:?WORKER_DATABASE_PASSWORD is required}
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?DISCORD_TOKEN is required}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+      DRAND_CHAIN_HASH: ${DRAND_CHAIN_HASH:?DRAND_CHAIN_HASH is required}
+      DRAND_PUBLIC_KEY: ${DRAND_PUBLIC_KEY:?DRAND_PUBLIC_KEY is required}
+      DRAND_PERIOD: ${DRAND_PERIOD:-3}
+      DRAND_GENESIS_TIME: ${DRAND_GENESIS_TIME:-1692803367}
+      DRAND_SCHEME: ${DRAND_SCHEME:-bls-unchained-g1-rfc9380}
       DRAND_BASE_URLS: ${DRAND_BASE_URLS:-https://api.drand.sh,https://api2.drand.sh}
-      PRIVACY_HASH_SALT: ${PRIVACY_HASH_SALT}
+      PRIVACY_HASH_SALT: ${PRIVACY_HASH_SALT:?PRIVACY_HASH_SALT is required}
       HEALTH_PORT: "3002"
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
-      migrate:
+      db-provision:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -88,26 +159,31 @@ services:
       interval: 20s
       timeout: 5s
       retries: 5
+    mem_limit: 1g
     networks:
       - internal
 
   web:
+    <<: *app-hardening
     container_name: giveaway-bot-web
     build:
       context: .
       target: web
     restart: unless-stopped
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      DISCORD_TOKEN: ${DISCORD_TOKEN}
-      DISCORD_APPLICATION_ID: ${DISCORD_APPLICATION_ID}
-      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
-      SESSION_SECRET: ${SESSION_SECRET}
-      OAUTH_ENCRYPTION_KEY: ${OAUTH_ENCRYPTION_KEY}
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:?POSTGRES_DB is required}
+      PGUSER: ${WEB_DATABASE_USER:?WEB_DATABASE_USER is required}
+      PGPASSWORD: ${WEB_DATABASE_PASSWORD:?WEB_DATABASE_PASSWORD is required}
+      DISCORD_APPLICATION_ID: ${DISCORD_APPLICATION_ID:?DISCORD_APPLICATION_ID is required}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:?DISCORD_CLIENT_SECRET is required}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      OAUTH_ENCRYPTION_KEY: ${OAUTH_ENCRYPTION_KEY:?OAUTH_ENCRYPTION_KEY is required}
+      PRIVACY_HASH_SALT: ${PRIVACY_HASH_SALT:?PRIVACY_HASH_SALT is required}
       NEXT_TELEMETRY_DISABLED: "1"
     depends_on:
-      migrate:
+      db-provision:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -120,6 +196,10 @@ services:
       interval: 20s
       timeout: 5s
       retries: 5
+    mem_limit: 1g
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+      - /app/apps/web/.next/cache:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0700
     networks:
       - internal
       - caddy
