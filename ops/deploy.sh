@@ -44,8 +44,28 @@ fi
 git checkout --detach "${DEPLOY_SHA}"
 [[ "$(git rev-parse HEAD)" == "${DEPLOY_SHA}" ]]
 
-doppler run --project "${DOPPLER_PROJECT}" --config "${DOPPLER_CONFIG}" -- \
-  docker compose -p giveaway-bot up -d --build --remove-orphans
+log_one_shot_failure() {
+  local service container_id
+  for service in migrate db-provision; do
+    container_id="$(
+      docker ps -a \
+        --filter label=com.docker.compose.project=giveaway-bot \
+        --filter "label=com.docker.compose.service=${service}" \
+        --format '{{.ID}}' \
+        | head -n 1
+    )"
+    if [[ -n "${container_id}" ]]; then
+      printf '%s\n' "${service} logs:" >&2
+      docker logs --tail 200 "${container_id}" >&2 || true
+    fi
+  done
+}
+
+if ! doppler run --project "${DOPPLER_PROJECT}" --config "${DOPPLER_CONFIG}" -- \
+  docker compose -p giveaway-bot up -d --build --remove-orphans; then
+  log_one_shot_failure
+  exit 1
+fi
 
 container_for_service() {
   local service="$1"
