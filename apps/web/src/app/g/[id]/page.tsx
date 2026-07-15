@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
@@ -10,7 +11,14 @@ import {
 } from "../../../components/ui";
 import { LocalTime } from "../../../components/local-time";
 import { getSession } from "../../../lib/auth";
-import { getPublicGiveaway } from "../../../lib/queries";
+import { isUuid, parsePositiveInt32 } from "../../../lib/identifiers";
+import {
+  PublicEvidenceBusyError,
+  publicApiClientKey,
+  takePublicApiRateLimit,
+} from "../../../lib/public-api-control";
+import { getCachedPublicGiveaway } from "../../../lib/public-giveaway";
+import { publicOffsetPageCount } from "../../../lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -20,19 +28,17 @@ function participantAvatar(userId: string, avatarHash: string | null): string | 
   return `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}.${extension}?size=96`;
 }
 
-export async function generateMetadata({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}): Promise<Metadata> {
-  const { id } = await params;
-  const data = await getPublicGiveaway(id, 1, 1);
-  return data
-    ? {
-        title: data.giveaway.prize,
-        description: `Public participants, winners, audit trail, and drand proof for ${data.giveaway.prize}.`,
-      }
-    : { title: "Giveaway not found" };
+function pageNumber(value: string | undefined, maximum = 2_147_483_647): number {
+  if (!value || !/^\d+$/u.test(value)) return 1;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, maximum) : 1;
+}
+
+export function generateMetadata(): Metadata {
+  return {
+    title: "Giveaway evidence",
+    description: "Public participants, winners, audit trail, and drand proof.",
+  };
 }
 
 export default async function PublicGiveawayPage({
@@ -40,26 +46,77 @@ export default async function PublicGiveawayPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ page?: string; draw?: string }>;
+  searchParams: Promise<{ page?: string; draw?: string; winnerPage?: string }>;
 }): Promise<React.ReactElement> {
   const { id } = await params;
+  if (!isUuid(id)) notFound();
+  const rate = takePublicApiRateLimit(publicApiClientKey(await headers()));
+  if (!rate.allowed) {
+    return (
+      <div className="document-page">
+        <main className="document">
+          <p className="eyebrow">PLEASE WAIT</p>
+          <h1>Too many evidence requests</h1>
+          <p>Try this public giveaway page again in about a minute.</p>
+        </main>
+      </div>
+    );
+  }
   const query = await searchParams;
-  const page = Math.max(1, Number.parseInt(query.page ?? "1", 10) || 1);
-  const [session, data] = await Promise.all([
+  const requestedPage = pageNumber(query.page);
+  const requestedWinnerPage = pageNumber(query.winnerPage, 21_474_837);
+  const requestedDrawNumber = query.draw === undefined ? null : parsePositiveInt32(query.draw);
+  if (query.draw !== undefined && requestedDrawNumber === null) notFound();
+  const loaded = await Promise.all([
     getSession(),
-    getPublicGiveaway(id, page, 100),
-  ]);
+    getCachedPublicGiveaway(id, {
+      participantPage: requestedPage,
+      participantPageSize: 100,
+      evidencePage: requestedWinnerPage,
+      evidencePageSize: 100,
+      includeCandidates: false,
+      includeExclusions: false,
+      ...(requestedWinnerPage > 1
+        ? { winnerAfterPosition: (requestedWinnerPage - 1) * 100 }
+        : {}),
+      ...(requestedDrawNumber === null ? {} : { drawNumber: requestedDrawNumber }),
+    }),
+  ])
+    .then(([session, data]) => ({ session, data }))
+    .catch((error: unknown) => {
+      if (error instanceof PublicEvidenceBusyError) return null;
+      throw error;
+    });
+  if (!loaded) {
+    return (
+      <div className="document-page">
+        <main className="document">
+          <p className="eyebrow">PLEASE WAIT</p>
+          <h1>Public evidence is busy</h1>
+          <p>Try this giveaway page again in a few seconds.</p>
+        </main>
+      </div>
+    );
+  }
+  const { session, data } = loaded;
   if (!data) notFound();
+  if (
+    requestedDrawNumber !== null &&
+    data.selectedDrawNumber !== requestedDrawNumber
+  ) {
+    notFound();
+  }
   const { giveaway, participants, participantTotal, draws, audit, activity } = data;
-  const requestedDrawNumber = /^\d+$/.test(query.draw ?? "")
-    ? Number(query.draw)
-    : null;
+  const page = data.pagination.participants.page;
+  const winnerPage = data.pagination.evidence.page;
   const selectedDraw =
-    draws.find((draw) => draw.drawNumber === requestedDrawNumber) ??
+    draws.find((draw) => draw.drawNumber === data.selectedDrawNumber) ??
     draws[0] ??
     null;
   const selectedDrawQuery = selectedDraw ? `&draw=${selectedDraw.drawNumber}` : "";
-  const pages = Math.max(1, Math.ceil(participantTotal / 100));
+  const winnerPageQuery = winnerPage > 1 ? `&winnerPage=${winnerPage}` : "";
+  const pages = publicOffsetPageCount(participantTotal, 100);
+  const winnerPages = Math.max(1, Math.ceil((selectedDraw?.winnerTotal ?? 0) / 100));
   const discordUrl = giveaway.messageId
     ? `https://discord.com/channels/${giveaway.guildId}/${giveaway.channelId}/${giveaway.messageId}`
     : null;
@@ -84,7 +141,10 @@ export default async function PublicGiveawayPage({
             {discordUrl ? (
               <a className="button button-secondary" href={discordUrl}>Open in Discord</a>
             ) : null}
-            <a className="button button-quiet" href={`/api/giveaways/${giveaway.id}`}>
+            <a
+              className="button button-quiet"
+              href={`/api/giveaways/${giveaway.id}${selectedDraw ? `?draw=${selectedDraw.drawNumber}` : ""}`}
+            >
               JSON evidence
             </a>
           </div>
@@ -137,11 +197,12 @@ export default async function PublicGiveawayPage({
                 {selectedDraw ? <Status value={selectedDraw.status} /> : null}
               </div>
               {selectedDraw ? (
-                <div className="proof-layout">
+                <>
+                  <div className="proof-layout">
                   <dl className="proof-values">
                     <div>
                       <dt>Algorithm</dt>
-                      <dd><code>lilac-weighted-v1</code></dd>
+                      <dd><code>{selectedDraw.proofVersion}</code></dd>
                     </div>
                     <div>
                       <dt>Candidate snapshot SHA-256</dt>
@@ -180,8 +241,14 @@ export default async function PublicGiveawayPage({
                     <span className="verification-number">{selectedDraw.drawNumber.toString().padStart(2, "0")}</span>
                     <h3>Reproduce this draw</h3>
                     <ol>
-                      <li>Sort candidates by join time, then user ID.</li>
-                      <li>Hash the canonical user ID, ISO join time, and weight array.</li>
+                      <li>
+                        {selectedDraw.proofVersion === "lilac-weighted-v2"
+                          ? "Read candidates in published ordinal order and verify ordinals are contiguous from zero."
+                          : "Sort candidates by join time, then user ID."}
+                      </li>
+                      <li>
+                        Hash the canonical {selectedDraw.proofVersion === "lilac-weighted-v2" ? "participant ID" : "user ID"}, ISO join time, and weight array.
+                      </li>
                       <li>Verify the drand signature and its SHA-256 randomness.</li>
                       <li>Run weighted rejection sampling without replacement.</li>
                     </ol>
@@ -194,7 +261,15 @@ export default async function PublicGiveawayPage({
                       Inspect the pinned Quicknet chain
                     </a>
                   </aside>
-                </div>
+                  </div>
+                  {selectedDraw.legacyVerificationStatus === "redacted_unverifiable" ? (
+                    <p className="muted">
+                      This legacy v1 proof contains a privacy-redacted canonical user ID,
+                      so the currently published rows cannot reproduce its historical
+                      candidate hash.
+                    </p>
+                  ) : null}
+                </>
               ) : (
                 <div className="empty-state compact">
                   <h3>No draw committed yet</h3>
@@ -211,15 +286,32 @@ export default async function PublicGiveawayPage({
                 </div>
               </div>
               {selectedDraw?.winners.length ? (
-                <ol className="winner-list">
-                  {selectedDraw.winners.map((winner) => (
-                    <li key={winner.userId}>
-                      <span>{winner.position.toString().padStart(2, "0")}</span>
-                      <strong>{winner.username}</strong>
-                      <code>{winner.userId}</code>
-                    </li>
-                  ))}
-                </ol>
+                <>
+                  <ol className="winner-list">
+                    {selectedDraw.winners.map((winner) => (
+                      <li key={winner.participantId}>
+                        <span>{winner.position.toString().padStart(2, "0")}</span>
+                        <strong>{winner.username}</strong>
+                        <code>{winner.userId}</code>
+                      </li>
+                    ))}
+                  </ol>
+                  {winnerPages > 1 ? (
+                    <nav className="pagination" aria-label="Winner pages">
+                      {winnerPage > 1 ? (
+                        <Link href={`?winnerPage=${winnerPage - 1}${selectedDrawQuery}${page > 1 ? `&page=${page}` : ""}`}>
+                          Previous winners
+                        </Link>
+                      ) : <span />}
+                      <span>Winner page {winnerPage} of {winnerPages}</span>
+                      {winnerPage < winnerPages ? (
+                        <Link href={`?winnerPage=${winnerPage + 1}${selectedDrawQuery}${page > 1 ? `&page=${page}` : ""}`}>
+                          Next winners
+                        </Link>
+                      ) : <span />}
+                    </nav>
+                  ) : null}
+                </>
               ) : (
                 <p className="muted">Winners have not been selected yet.</p>
               )}
@@ -295,9 +387,9 @@ export default async function PublicGiveawayPage({
               </div>
               {pages > 1 ? (
                 <nav className="pagination" aria-label="Participant pages">
-                  {page > 1 ? <Link href={`?page=${page - 1}${selectedDrawQuery}`}>Previous</Link> : <span />}
+                  {page > 1 ? <Link href={`?page=${page - 1}${selectedDrawQuery}${winnerPageQuery}`}>Previous</Link> : <span />}
                   <span>Page {page} of {pages}</span>
-                  {page < pages ? <Link href={`?page=${page + 1}${selectedDrawQuery}`}>Next</Link> : <span />}
+                  {page < pages ? <Link href={`?page=${page + 1}${selectedDrawQuery}${winnerPageQuery}`}>Next</Link> : <span />}
                 </nav>
               ) : null}
             </section>

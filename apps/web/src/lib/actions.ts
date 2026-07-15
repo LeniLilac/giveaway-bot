@@ -3,8 +3,22 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { canManageGuild, destroySession, getDiscordGuilds, requireSession } from "./auth";
+import {
+  canManageGuild,
+  destroySession,
+  getCurrentDiscordGuildMember,
+  getDiscordGuilds,
+  requireSession,
+} from "./auth";
+import type { SessionUser } from "./auth";
 import { db } from "./db";
+import { isUuid } from "./identifiers";
+import {
+  assertPrivacyIdentityWritable,
+  lockPrivacyAffectedGiveaways,
+  lockPrivacyIdentity,
+  upsertPrivacyDeletionFence,
+} from "./privacy-lock";
 
 const COMMANDS = ["create", "start", "end", "reroll", "delete", "queue", "list"] as const;
 type Action = "start" | "end" | "reroll" | "delete";
@@ -27,13 +41,10 @@ function rerollWinnerCount(formData: FormData): number {
 }
 
 async function userCanRun(
-  userId: string,
+  session: SessionUser,
   guildId: string,
   command: string,
-  creatorUserId: string | null,
 ): Promise<boolean> {
-  if (creatorUserId === userId) return true;
-  const session = await requireSession();
   const guilds = await getDiscordGuilds(session);
   const guild = guilds.find((candidate) => candidate.id === guildId);
   if (!guild) return false;
@@ -43,37 +54,30 @@ async function userCanRun(
     [guildId, command],
   );
   if (roleResult.rows.length === 0) return false;
-  const response = await fetch(
-    `https://discord.com/api/v10/guilds/${guildId}/members/${userId}`,
-    {
-      headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` },
-      cache: "no-store",
-    },
-  );
-  if (!response.ok) return false;
-  const member = (await response.json()) as { roles: string[] };
+  const member = await getCurrentDiscordGuildMember(session, guildId);
+  if (!member) return false;
   return roleResult.rows.some((row) => member.roles.includes(row.role_id as string));
 }
 
 export async function queueGiveawayAction(formData: FormData): Promise<void> {
   const session = await requireSession();
   const giveawayId = String(formData.get("giveawayId") ?? "");
+  if (!isUuid(giveawayId)) throw new Error("Giveaway not found.");
   const action = String(formData.get("action") ?? "") as Action;
   if (!["start", "end", "reroll", "delete"].includes(action)) {
     throw new Error("Invalid giveaway action.");
   }
   const result = await db.query(
-    `SELECT id, guild_id, creator_user_id, status FROM giveaways WHERE id = $1`,
+    `SELECT id, guild_id, status FROM giveaways WHERE id = $1`,
     [giveawayId],
   );
   const giveaway = result.rows[0];
   if (!giveaway) throw new Error("Giveaway not found.");
   if (
     !(await userCanRun(
-      session.id,
+      session,
       giveaway.guild_id as string,
       action,
-      (giveaway.creator_user_id as string | null) ?? null,
     ))
   ) {
     throw new Error("You are not allowed to run this action.");
@@ -91,6 +95,7 @@ export async function queueGiveawayAction(formData: FormData): Promise<void> {
   const client = await db.connect();
   try {
     await client.query("BEGIN");
+    await assertPrivacyIdentityWritable(client, session.id);
     if (action === "reroll") {
       await client.query(
         "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
@@ -103,6 +108,39 @@ export async function queueGiveawayAction(formData: FormData): Promise<void> {
     );
     if (!valid[action].includes(locked.rows[0]?.status as string)) {
       throw new Error(`This giveaway cannot be ${action}ed from its current status.`);
+    }
+    const payload = {
+      actorUserId: session.id,
+      source: "web",
+      ...(winnerCount === undefined ? {} : { winnerCount }),
+    };
+    const duplicate = await client.query(
+      `SELECT id, run_at > now() AS needs_acceleration FROM jobs
+       WHERE giveaway_id = $1 AND type = $2 AND completed_at IS NULL
+       LIMIT 1`,
+      [giveawayId, `${action}_giveaway`],
+    );
+    if (duplicate.rows.length > 0) {
+      if (action === "reroll") {
+        throw new Error("Another reroll is already queued or drawing.");
+      }
+      if (
+        !["start", "end"].includes(action) ||
+        duplicate.rows[0]?.needs_acceleration !== true
+      ) {
+        await client.query("COMMIT");
+        return;
+      }
+      await client.query(
+        `UPDATE jobs
+         SET run_at = now(), payload = payload || $2::jsonb,
+             attempts = 0, last_error = NULL,
+             locked_at = NULL, locked_by = NULL, lock_token = NULL,
+             lease_expires_at = NULL
+         WHERE id = $1 AND completed_at IS NULL
+           AND (lock_token IS NULL OR lease_expires_at <= now())`,
+        [duplicate.rows[0].id, JSON.stringify(payload)],
+      );
     }
     if (action === "reroll") {
       const pending = await client.query(
@@ -120,16 +158,13 @@ export async function queueGiveawayAction(formData: FormData): Promise<void> {
         throw new Error("Another reroll is already queued or drawing.");
       }
     }
-    const payload = {
-      actorUserId: session.id,
-      source: "web",
-      ...(winnerCount === undefined ? {} : { winnerCount }),
-    };
-    await client.query(
-      `INSERT INTO jobs (id, type, giveaway_id, payload, run_at)
-       VALUES ($1, $2, $3, $4::jsonb, now())`,
-      [randomUUID(), `${action}_giveaway`, giveawayId, JSON.stringify(payload)],
-    );
+    if (duplicate.rows.length === 0) {
+      await client.query(
+        `INSERT INTO jobs (id, type, giveaway_id, payload, run_at)
+         VALUES ($1, $2, $3, $4::jsonb, now())`,
+        [randomUUID(), `${action}_giveaway`, giveawayId, JSON.stringify(payload)],
+      );
+    }
     await client.query(
       `INSERT INTO audit_events
        (id, guild_id, giveaway_id, actor_user_id, action, source, metadata)
@@ -168,6 +203,7 @@ export async function saveCommandRoles(formData: FormData): Promise<void> {
   const client = await db.connect();
   try {
     await client.query("BEGIN");
+    await assertPrivacyIdentityWritable(client, session.id);
     await client.query(
       `INSERT INTO guild_settings (guild_id, guild_name, guild_icon)
        VALUES ($1, $2, $3)
@@ -208,17 +244,48 @@ export async function saveCommandRoles(formData: FormData): Promise<void> {
 
 export async function requestDataDeletion(): Promise<void> {
   const session = await requireSession();
-  const id = randomUUID();
-  await db.query(
-    `INSERT INTO data_deletion_requests (id, user_id, status)
-     VALUES ($1, $2, 'queued')`,
-    [id, session.id],
-  );
-  await db.query(
-    `INSERT INTO jobs (id, type, payload, run_at, idempotency_key)
-     VALUES ($1, 'privacy_delete', $2::jsonb, now(), $3)`,
-    [randomUUID(), JSON.stringify({ userId: session.id, requestId: id }), `privacy:${session.id}`],
-  );
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    await lockPrivacyIdentity(client, session.id);
+    await lockPrivacyAffectedGiveaways(client, session.id);
+    const existing = await client.query(
+      `SELECT id FROM data_deletion_requests
+       WHERE user_id = $1 AND status IN ('queued', 'processing')
+       ORDER BY requested_at DESC
+       LIMIT 1`,
+      [session.id],
+    );
+    const requestId = (existing.rows[0]?.id as string | undefined) ?? randomUUID();
+    if (existing.rows.length === 0) {
+      await client.query(
+        `INSERT INTO data_deletion_requests (id, user_id, status)
+         VALUES ($1, $2, 'queued')`,
+        [requestId, session.id],
+      );
+    }
+    await upsertPrivacyDeletionFence(client, session.id, requestId);
+    await client.query(
+      `INSERT INTO jobs (id, type, payload, run_at, idempotency_key)
+       VALUES ($1, 'privacy_delete', $2::jsonb, now(), $3)
+       ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+       DO UPDATE SET
+         run_at = now(), attempts = 0, locked_at = NULL, locked_by = NULL,
+         last_error = NULL, completed_at = NULL
+       WHERE jobs.completed_at IS NOT NULL`,
+      [
+        randomUUID(),
+        JSON.stringify({ userId: session.id, requestId }),
+        `privacy:${requestId}`,
+      ],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
   await destroySession();
   redirect("/privacy?deletion=requested");
 }

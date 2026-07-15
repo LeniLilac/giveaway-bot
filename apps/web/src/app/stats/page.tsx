@@ -1,12 +1,29 @@
+import { headers } from "next/headers";
 import { Footer, SiteHeader } from "../../components/ui";
 import { getSession } from "../../lib/auth";
-import { getPublicStats } from "../../lib/queries";
+import {
+  publicApiClientKey,
+  takePublicApiRateLimit,
+} from "../../lib/public-api-control";
+import { getCachedPublicStats } from "../../lib/public-stats";
 
 export const metadata = { title: "Stats" };
 export const dynamic = "force-dynamic";
 
 export default async function StatsPage(): Promise<React.ReactElement> {
-  const [session, stats] = await Promise.all([getSession(), getPublicStats()]);
+  const rate = takePublicApiRateLimit(publicApiClientKey(await headers()));
+  if (!rate.allowed) {
+    return (
+      <div className="document-page">
+        <main className="document">
+          <p className="eyebrow">PLEASE WAIT</p>
+          <h1>Too many statistics requests</h1>
+          <p>Try this page again in about a minute.</p>
+        </main>
+      </div>
+    );
+  }
+  const [session, stats] = await Promise.all([getSession(), getCachedPublicStats()]);
   const metrics = [
     ["Servers", stats.servers],
     ["Giveaways created", stats.giveaways],

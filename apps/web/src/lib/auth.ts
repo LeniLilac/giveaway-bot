@@ -1,9 +1,11 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import type { Pool, PoolClient } from "pg";
 import { decrypt, encrypt, hash, randomToken } from "./crypto";
 import { db } from "./db";
 
 const SESSION_COOKIE = "lilac_session";
+const DISCORD_REQUEST_TIMEOUT_MS = 10_000;
 
 export interface SessionUser {
   id: string;
@@ -24,6 +26,10 @@ export interface DiscordGuild {
   permissions: string;
 }
 
+export interface DiscordGuildMember {
+  roles: string[];
+}
+
 interface TokenResponse {
   access_token: string;
   refresh_token?: string;
@@ -32,9 +38,12 @@ interface TokenResponse {
   token_type: string;
 }
 
-export async function createSession(userId: string): Promise<void> {
+export async function createSession(
+  userId: string,
+  client: Pick<Pool | PoolClient, "query"> = db,
+): Promise<void> {
   const token = randomToken();
-  await db.query(
+  await client.query(
     `INSERT INTO web_sessions (id_hash, user_id, expires_at)
      VALUES ($1, $2, now() + interval '30 days')`,
     [hash(token), userId],
@@ -103,6 +112,7 @@ async function refreshDiscordToken(session: SessionUser): Promise<SessionUser> {
       refresh_token: session.refreshToken,
     }),
     cache: "no-store",
+    signal: AbortSignal.timeout(DISCORD_REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error("Discord OAuth token refresh failed.");
   const token = (await response.json()) as TokenResponse;
@@ -123,13 +133,13 @@ async function refreshDiscordToken(session: SessionUser): Promise<SessionUser> {
       token.scope,
     ],
   );
-  return {
-    ...session,
+  Object.assign(session, {
     accessToken: token.access_token,
     refreshToken: token.refresh_token ?? session.refreshToken,
     tokenExpiresAt: expiresAt,
     scope: token.scope,
-  };
+  });
+  return session;
 }
 
 export async function getDiscordGuilds(session: SessionUser): Promise<DiscordGuild[]> {
@@ -140,9 +150,40 @@ export async function getDiscordGuilds(session: SessionUser): Promise<DiscordGui
   const response = await fetch("https://discord.com/api/v10/users/@me/guilds", {
     headers: { Authorization: `Bearer ${current.accessToken}` },
     cache: "no-store",
+    signal: AbortSignal.timeout(DISCORD_REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error("Could not load Discord servers.");
   return (await response.json()) as DiscordGuild[];
+}
+
+export async function getCurrentDiscordGuildMember(
+  session: SessionUser,
+  guildId: string,
+): Promise<DiscordGuildMember | null> {
+  const current =
+    session.tokenExpiresAt.getTime() < Date.now() + 60_000
+      ? await refreshDiscordToken(session)
+      : session;
+  const response = await fetch(
+    `https://discord.com/api/v10/users/@me/guilds/${guildId}/member`,
+    {
+      headers: { Authorization: `Bearer ${current.accessToken}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(DISCORD_REQUEST_TIMEOUT_MS),
+    },
+  );
+  if (response.status === 404) return null;
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(
+      "Discord role access is missing or expired. Sign out, sign in again, and approve the requested access.",
+    );
+  }
+  if (!response.ok) throw new Error("Could not verify your current Discord roles.");
+  const member = (await response.json()) as Partial<DiscordGuildMember>;
+  if (!Array.isArray(member.roles) || member.roles.some((role) => typeof role !== "string")) {
+    throw new Error("Discord returned invalid server role data.");
+  }
+  return { roles: member.roles };
 }
 
 export function canManageGuild(guild: DiscordGuild): boolean {

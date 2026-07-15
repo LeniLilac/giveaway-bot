@@ -1,13 +1,16 @@
 import Link from "next/link";
 import { AppShell, GiveawayTable } from "../../components/ui";
 import { canManageGuild, getDiscordGuilds, requireSession } from "../../lib/auth";
+import { parsePositiveInt32 } from "../../lib/identifiers";
 import { getUserDashboard } from "../../lib/queries";
 
 export const dynamic = "force-dynamic";
 const PAGE_SIZE = 50;
+const MAX_DASHBOARD_PAGE = 2_001;
 
 function parsePage(value: string | undefined): number {
-  return Math.max(1, Number.parseInt(value ?? "1", 10) || 1);
+  const parsed = parsePositiveInt32(value);
+  return parsed === null ? 1 : Math.min(parsed, MAX_DASHBOARD_PAGE);
 }
 
 function DashboardPager({

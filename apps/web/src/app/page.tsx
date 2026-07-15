@@ -91,7 +91,7 @@ export default async function HomePage(): Promise<React.ReactElement> {
                 <h3>Select deterministically</h3>
                 <p>Rejection sampling maps the beacon to weighted entries without modulo bias or replacement.</p>
               </div>
-              <code>lilac-weighted-v1</code>
+              <code>lilac-weighted-v2</code>
             </li>
           </ol>
         </section>

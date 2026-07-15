@@ -10,6 +10,9 @@ import {
 function secret(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required.`);
+  if (Buffer.byteLength(value, "utf8") < 32) {
+    throw new Error(`${name} must contain at least 32 bytes.`);
+  }
   return value;
 }
 

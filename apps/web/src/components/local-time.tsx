@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
@@ -18,6 +18,8 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
   day: "numeric",
 });
 
+const subscribeToHydration = (): (() => void) => () => undefined;
+
 function formatLocalTime(value: string, dateOnly: boolean): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "Invalid date";
@@ -25,13 +27,12 @@ function formatLocalTime(value: string, dateOnly: boolean): string {
 }
 
 function useLocalTime(value: string | null, dateOnly = false): string | null {
-  const [formatted, setFormatted] = useState<string | null>(null);
-
-  useEffect(() => {
-    setFormatted(value ? formatLocalTime(value, dateOnly) : null);
-  }, [dateOnly, value]);
-
-  return formatted;
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
+  );
+  return hydrated && value ? formatLocalTime(value, dateOnly) : null;
 }
 
 export function LocalTime({

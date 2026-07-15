@@ -20,6 +20,13 @@ export default async function PrivacyPage({
         {query.deletion === "requested" ? (
           <p className="notice success">Your deletion request was queued and your session was closed.</p>
         ) : null}
+        {query.deletion === "active" ? (
+          <p className="notice warning">
+            Sign-in was not restored because its authorization began before data
+            deletion finished. Once deletion is complete, start sign-in again and
+            approve Discord’s fresh consent prompt.
+          </p>
+        ) : null}
         <p className="document-lede">
           Lilac stores only the Discord data needed to run, operate, and publicly audit giveaways.
         </p>
@@ -31,8 +38,10 @@ export default async function PrivacyPage({
         </p>
         <h2>Dashboard accounts</h2>
         <p>
-          Discord OAuth grants identify and guilds scopes. Access and refresh tokens are encrypted
-          at rest. Browser sessions are represented by a random, HTTP-only cookie whose hash is stored.
+          Discord OAuth grants identify, guilds, and guilds.members.read scopes so Lilac can
+          verify live dashboard permissions and configured command roles. Access and refresh
+          tokens are encrypted at rest. Browser sessions are represented by a random, HTTP-only
+          cookie whose hash is stored.
         </p>
         <h2>Retention and deletion</h2>
         <p>
