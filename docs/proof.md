@@ -87,7 +87,7 @@ round_time = genesis_time + (round - 1) * period
 Round 1 is used when the target is at or before genesis. Candidate rows are
 inserted in batches, and the transaction uses PostgreSQL `clock_timestamp()` to
 verify immediately before commit that the beacon remains at least 15 seconds
-in the future. Lilac normally chooses a 60-second publication cushion. A draw
+in the future. Lilac normally chooses a 20-second publication cushion. A draw
 cannot complete until Discord publication succeeds and a second database-clock
 guard confirms at least 15 seconds remain. If publication is delayed, the
 unpublished draw is moved to a later round before it can complete.

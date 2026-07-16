@@ -5,6 +5,7 @@ import { closeHealthServer, startHealthServer } from "@lilac/core";
 import { claimJob, completeJob, heartbeatJob, retryJob } from "./database.js";
 import { DiscordApi } from "./discord.js";
 import { JobPayloadError, processJob } from "./lifecycle.js";
+import { MemberSnapshotClient } from "./member-snapshot.js";
 import { assertWorkerHealthy, type WorkerHealthState } from "./worker-health.js";
 
 const required = (name: string): string => {
@@ -36,6 +37,10 @@ const privacyHashSalt = required("PRIVACY_HASH_SALT");
 if (Buffer.byteLength(privacyHashSalt, "utf8") < 32) {
   throw new Error("PRIVACY_HASH_SALT must contain at least 32 bytes.");
 }
+const memberSnapshotClient = new MemberSnapshotClient(
+  required("MEMBER_SNAPSHOT_URL"),
+  required("INTERNAL_RPC_SECRET"),
+);
 const dependencies = {
   pool,
   logger,
@@ -44,6 +49,7 @@ const dependencies = {
     required("DISCORD_TOKEN"),
     websiteUrl,
     required("DISCORD_APPLICATION_ID"),
+    memberSnapshotClient,
   ),
   drand: {
     chainHash: required("DRAND_CHAIN_HASH"),

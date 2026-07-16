@@ -4,7 +4,7 @@ import type { Candidate } from "./selection.js";
 import { roundAtOrAfter, roundTime, type ChainInfo } from "./drand.js";
 
 export const MIN_BEACON_FUTURE_SECONDS = 15;
-export const COMMITMENT_SAFETY_SECONDS = 60;
+export const COMMITMENT_SAFETY_SECONDS = 20;
 
 export interface Job {
   id: string;
@@ -527,7 +527,7 @@ export async function createDrawCommitment(
       await client.query(
         `INSERT INTO jobs (id, type, giveaway_id, payload, run_at, idempotency_key)
          VALUES ($1, 'complete_draw', $2, jsonb_build_object('drawId', $3::text),
-                 $4::timestamptz + interval '2 seconds', $5)
+                 $4::timestamptz + interval '1 second', $5)
          ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE
          SET run_at = EXCLUDED.run_at, payload = EXCLUDED.payload, completed_at = NULL`,
         [randomUUID(), input.giveaway.id, input.drawId, beaconTime, `draw:${input.drawId}`],
@@ -595,7 +595,7 @@ export async function ensureUnpublishedDrawRound(
         [draw.giveawayId, round.toString()],
       );
       await client.query(
-        `UPDATE jobs SET run_at = $1::timestamptz + interval '2 seconds'
+        `UPDATE jobs SET run_at = $1::timestamptz + interval '1 second'
          WHERE idempotency_key = $2 AND completed_at IS NULL`,
         [beaconTime, `draw:${draw.id}`],
       );

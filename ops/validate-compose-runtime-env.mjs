@@ -21,6 +21,7 @@ const requiredEnvironment = {
     "DISCORD_APPLICATION_ID",
     "PUBLIC_BASE_URL",
     "PRIVACY_HASH_SALT",
+    "INTERNAL_RPC_SECRET",
   ],
   worker: [
     "PGHOST",
@@ -30,6 +31,8 @@ const requiredEnvironment = {
     "DISCORD_TOKEN",
     "DISCORD_APPLICATION_ID",
     "PUBLIC_BASE_URL",
+    "MEMBER_SNAPSHOT_URL",
+    "INTERNAL_RPC_SECRET",
     "DRAND_CHAIN_HASH",
     "DRAND_PUBLIC_KEY",
     "PRIVACY_HASH_SALT",

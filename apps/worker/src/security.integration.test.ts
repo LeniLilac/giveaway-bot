@@ -41,6 +41,8 @@ class FakeDiscord {
   redactedGiveawayMessages: string[] = [];
   redactedGiveawayMessageIds: string[] = [];
   messageCount = 0;
+  memberSnapshots = 0;
+  omittedSnapshotMembers = new Set<string>();
   messageSearchError: Error | null = null;
   messageSearches: Array<{ guildId: string; userId: string; since: Date | null }> = [];
   reconciliation:
@@ -57,6 +59,16 @@ class FakeDiscord {
 
   async getMember(_guildId: string, userId: string) {
     return { user: { id: userId, username: userId }, roles: [...(this.roles.get(userId) ?? [])] };
+  }
+  async getMembers(guildId: string, userIds: string[]) {
+    this.memberSnapshots += 1;
+    return new Map(
+      await Promise.all(
+        userIds
+          .filter((userId) => !this.omittedSnapshotMembers.has(userId))
+          .map(async (userId) => [userId, await this.getMember(guildId, userId)] as const),
+      ),
+    );
   }
   async searchMessageCount(guildId: string, userId: string, since: Date | null) {
     this.messageSearches.push({ guildId, userId, since });
@@ -603,6 +615,7 @@ suite("worker database security invariants", () => {
       deps as never,
       job({ id: randomUUID(), type: "end_giveaway", giveawayId }),
     );
+    expect(discord.memberSnapshots).toBe(1);
     expect(discord.messageSearches).toEqual([{ guildId: "guild", userId, since: startedAt }]);
     const exclusion = await pool.query(
       `SELECT exclusion.reason
@@ -634,6 +647,35 @@ suite("worker database security invariants", () => {
       dependencies(discord) as never,
       job({ id: randomUUID(), type: "end_giveaway", giveawayId }),
     )).rejects.toThrow("message search timed out");
+    const drawCount = await pool.query(
+      "SELECT count(*)::int AS count FROM draws WHERE giveaway_id = $1",
+      [giveawayId],
+    );
+    expect(drawCount.rows[0]!.count).toBe(0);
+  });
+
+  it("does not publish a partial snapshot when member resolution is incomplete", async () => {
+    const giveawayId = randomUUID();
+    const userId = "100000000000000042";
+    await insertGiveaway(giveawayId, "active", 1);
+    await pool.query(
+      `UPDATE giveaways SET ends_at = now() - interval '1 second',
+         message_id = '100000000000000096'
+       WHERE id = $1`,
+      [giveawayId],
+    );
+    await pool.query(
+      `INSERT INTO entries (giveaway_id, user_id, username, joined_at)
+       VALUES ($1, $2, 'person', now() - interval '1 minute')`,
+      [giveawayId, userId],
+    );
+    const discord = new FakeDiscord();
+    discord.omittedSnapshotMembers.add(userId);
+
+    await expect(processJob(
+      dependencies(discord) as never,
+      job({ id: randomUUID(), type: "end_giveaway", giveawayId }),
+    )).rejects.toThrow("did not resolve every draw entry");
     const drawCount = await pool.query(
       "SELECT count(*)::int AS count FROM draws WHERE giveaway_id = $1",
       [giveawayId],
@@ -1281,7 +1323,7 @@ suite("worker database security invariants", () => {
     await markDiscordDeliverySending(pool, deliveryKey, first.claimToken);
     await pool.query(
       `UPDATE discord_deliveries
-       SET claim_expires_at = now() - interval '1 second'
+       SET claim_expires_at = now() - interval '1 minute'
        WHERE delivery_key = $1`,
       [deliveryKey],
     );

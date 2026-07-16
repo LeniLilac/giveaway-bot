@@ -7,6 +7,7 @@ import {
   winnerComponents,
 } from "@lilac/discord-ui";
 import type { WorkerGiveaway } from "./database.js";
+import type { MemberSnapshotClient } from "./member-snapshot.js";
 import { searchMessageCount as searchDiscordMessageCount } from "./message-search.js";
 
 export interface DiscordMember {
@@ -24,6 +25,7 @@ export class DiscordApi {
     private readonly token: string,
     private readonly websiteUrl: string,
     private readonly expectedAuthorId: string,
+    private readonly memberSnapshotClient?: MemberSnapshotClient,
   ) {
     this.rest = new REST({ version: "10", timeout: 30_000 }).setToken(this.token);
   }
@@ -42,6 +44,27 @@ export class DiscordApi {
       }
       throw error;
     }
+  }
+
+  async getMembers(
+    guildId: string,
+    userIds: string[],
+  ): Promise<Map<string, DiscordMember | null>> {
+    if (this.memberSnapshotClient) {
+      return this.memberSnapshotClient.getMembers(guildId, userIds);
+    }
+    const members = new Map<string, DiscordMember | null>();
+    let next = 0;
+    const workers = Array.from({ length: Math.min(8, userIds.length) }, async () => {
+      while (next < userIds.length) {
+        const index = next;
+        next += 1;
+        const userId = userIds[index]!;
+        members.set(userId, await this.getMember(guildId, userId));
+      }
+    });
+    await Promise.all(workers);
+    return members;
   }
 
   searchMessageCount(guildId: string, userId: string, since: Date | null): Promise<number> {

@@ -126,6 +126,17 @@ the giveaway row had not yet persisted its `message_id`.
 
 Confirm the bot can view and send messages in the target channel. For prize roles, confirm Lilac's highest role is above every configured role. After correction, retry the failed job.
 
+## Member snapshot failure
+
+Draw preparation requests fresh member records from the bot over the private
+Compose network. If jobs report `Member snapshot service` errors, confirm both
+services are healthy, `INTERNAL_RPC_SECRET` is identical for bot and worker,
+and the worker uses
+`http://bot:3003/internal/member-snapshot/v1`. A partial or malformed response
+fails closed and is never committed as draw evidence. Do not bypass the check
+with cached roles or manually insert candidates; restore the bot gateway or
+internal network and let the persistent job retry.
+
 ## Caddy
 
 ```bash

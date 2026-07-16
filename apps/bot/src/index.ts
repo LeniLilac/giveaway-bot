@@ -14,6 +14,7 @@ import {
   handleChatInput,
   handleModalSubmit,
 } from "./interactions.js";
+import { startMemberSnapshotServer } from "./member-snapshot-server.js";
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -104,6 +105,13 @@ client.on(Events.InteractionCreate, (interaction) => {
   });
 });
 
+const memberSnapshotServer = startMemberSnapshotServer({
+  port: Number(process.env.MEMBER_SNAPSHOT_PORT ?? 3003),
+  secret: required("INTERNAL_RPC_SECRET"),
+  client,
+  logger,
+});
+
 const healthServer = startHealthServer({
   port: Number(process.env.HEALTH_PORT ?? 3001),
   checks: {
@@ -112,6 +120,11 @@ const healthServer = startHealthServer({
     },
     discord: async () => {
       if (!client.isReady()) throw new Error("Discord gateway is not ready.");
+    },
+    memberSnapshot: () => {
+      if (!memberSnapshotServer.listening) {
+        throw new Error("Member snapshot server is not listening.");
+      }
     },
   },
 });
@@ -124,6 +137,7 @@ const shutdown = async (signal: string): Promise<void> => {
     client.destroy();
     const results = await Promise.allSettled([
       closeHealthServer(healthServer),
+      closeHealthServer(memberSnapshotServer),
       pool.end(),
     ]);
     const failures = results.flatMap((result) =>

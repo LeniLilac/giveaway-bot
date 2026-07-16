@@ -94,6 +94,12 @@ The installation URL needs the `bot` and `applications.commands` scopes. The lan
 
 Place Lilac's role above every prize role it should award. To configure `role_prizes`, the giveaway creator must be the server owner or have Manage Roles with a highest role above every selected prize role. Administrator satisfies Manage Roles but does not bypass role hierarchy; Manage Server and configured giveaway command roles alone are not sufficient. Message Content intent is not required. Required-message eligibility uses Discord's Search Guild Messages endpoint and may briefly wait while a server search index is prepared.
 
+At draw time, the worker asks the bot gateway for fresh member records in
+targeted batches, then commits eligibility and bonus-role weights before the
+future drand beacon. This does not require the privileged Server Members intent.
+The bridge is private to the Compose network and authenticated with the
+independent `INTERNAL_RPC_SECRET`, which must contain at least 32 bytes.
+
 The dashboard requests Discord's `identify`, `guilds`, and
 `guilds.members.read` OAuth scopes. The last scope lets it verify configured
 command roles using the signed-in member's live role list without enabling the
@@ -139,10 +145,11 @@ Production runs at `/opt/giveaway-bot` on the same VPS as Vanguard. Compose crea
 2. Install the deployment SSH public key in that account's `authorized_keys` and
    confirm a fresh SSH session can run `docker info` and `doppler --version`.
 3. Create Doppler `lilac-giveaway-bot/prd` with every secret in
-   `doppler.secrets.env.example`. Generate independent passwords of at least 32
-   bytes for `BOT_DATABASE_PASSWORD`, `WORKER_DATABASE_PASSWORD`, and
-   `WEB_DATABASE_PASSWORD`; none may match the PostgreSQL migration
-   administrator password or each other. On an existing PostgreSQL volume,
+   `doppler.secrets.env.example`. Generate independent secret values of at least
+   32 bytes for `BOT_DATABASE_PASSWORD`, `WORKER_DATABASE_PASSWORD`,
+   `WEB_DATABASE_PASSWORD`, and `INTERNAL_RPC_SECRET`; none may match the
+   PostgreSQL migration administrator password or each other. On an existing
+   PostgreSQL volume,
    `POSTGRES_USER` and `POSTGRES_PASSWORD` must still match the credentials used
    when that volume was initialized; changing those environment values does not
    rotate the database owner password.
@@ -207,9 +214,10 @@ bytes, remain private, and remain stable for the lifetime of stored giveaways.
 Rotating it without a deliberate proof-identity migration would break reroll
 exclusion for previously privacy-deleted winners.
 
-`SESSION_SECRET` and `OAUTH_ENCRYPTION_KEY` must each contain at least 32 bytes
-of independently generated secret material. Keep all three values in Doppler;
-the pinned drand chain metadata and public key are public configuration.
+`SESSION_SECRET`, `OAUTH_ENCRYPTION_KEY`, and `INTERNAL_RPC_SECRET` must each
+contain at least 32 bytes of independently generated secret material. Keep these
+values in Doppler; the pinned drand chain metadata and public key are public
+configuration.
 
 The public evidence API returns at most 250 participants, candidates,
 exclusions, and winners per request. Use `participant_page_size`,

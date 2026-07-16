@@ -638,6 +638,20 @@ async function prepareDraw(
   const priorWinners = reroll
     ? await previousWinnerProofIds(pool, giveaway.id)
     : new Set<string>();
+  const memberUserIds = entries
+    .filter((entry) => !giveaway.endedAt || entry.joinedAt <= giveaway.endedAt)
+    .map((entry) => entry.userId);
+  const memberSnapshotStartedAt = Date.now();
+  const members = await discord.getMembers(giveaway.guildId, memberUserIds);
+  dependencies.logger.info(
+    {
+      giveawayId: giveaway.id,
+      entryCount: entries.length,
+      checkedMemberCount: memberUserIds.length,
+      durationMs: Date.now() - memberSnapshotStartedAt,
+    },
+    "draw member snapshot collected",
+  );
   const eligibility = await mapConcurrent(entries, 8, async (entry) => {
     const proofId = proofIdForUser(dependencies, giveaway.id, entry.userId);
     if (giveaway.endedAt && entry.joinedAt > giveaway.endedAt) {
@@ -645,7 +659,10 @@ async function prepareDraw(
         exclusion: { userId: entry.userId, proofId, reason: "joined_after_end" },
       };
     }
-    const member = await discord.getMember(giveaway.guildId, entry.userId);
+    if (!members.has(entry.userId)) {
+      throw new Error("The member snapshot did not resolve every draw entry.");
+    }
+    const member = members.get(entry.userId) ?? null;
     const evaluated = evaluateMember(giveaway, entry, member, priorWinners, proofId);
     if (!evaluated.candidate || giveaway.requiredMessages === null) return evaluated;
     if (giveaway.messageScope === null) {

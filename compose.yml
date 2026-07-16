@@ -103,7 +103,9 @@ services:
       DISCORD_APPLICATION_ID: ${DISCORD_APPLICATION_ID:?DISCORD_APPLICATION_ID is required}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
       PRIVACY_HASH_SALT: ${PRIVACY_HASH_SALT:?PRIVACY_HASH_SALT is required}
+      INTERNAL_RPC_SECRET: ${INTERNAL_RPC_SECRET:?INTERNAL_RPC_SECRET is required}
       HEALTH_PORT: "3001"
+      MEMBER_SNAPSHOT_PORT: "3003"
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       db-provision:
@@ -137,6 +139,8 @@ services:
       DISCORD_TOKEN: ${DISCORD_TOKEN:?DISCORD_TOKEN is required}
       DISCORD_APPLICATION_ID: ${DISCORD_APPLICATION_ID:?DISCORD_APPLICATION_ID is required}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+      MEMBER_SNAPSHOT_URL: http://bot:3003/internal/member-snapshot/v1
+      INTERNAL_RPC_SECRET: ${INTERNAL_RPC_SECRET:?INTERNAL_RPC_SECRET is required}
       DRAND_CHAIN_HASH: ${DRAND_CHAIN_HASH:?DRAND_CHAIN_HASH is required}
       DRAND_PUBLIC_KEY: ${DRAND_PUBLIC_KEY:?DRAND_PUBLIC_KEY is required}
       DRAND_PERIOD: ${DRAND_PERIOD:-3}
@@ -149,6 +153,8 @@ services:
     depends_on:
       db-provision:
         condition: service_completed_successfully
+      bot:
+        condition: service_healthy
     healthcheck:
       test:
         [

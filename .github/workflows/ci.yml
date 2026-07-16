@@ -47,6 +47,7 @@ jobs:
           POSTGRES_PASSWORD: ci-password
           POSTGRES_USER: giveaway_bot
           PRIVACY_HASH_SALT: ci-privacy-hash-salt-at-least-32-bytes
+          INTERNAL_RPC_SECRET: ci-internal-rpc-secret-at-least-32-bytes
           PUBLIC_BASE_URL: https://giveaway.example.test
           SESSION_SECRET: ci-session-secret-at-least-32-bytes
           WEB_DATABASE_PASSWORD: ci-web-database-password-at-least-32-bytes
@@ -115,6 +116,7 @@ jobs:
           POSTGRES_PASSWORD: ci-password
           POSTGRES_USER: giveaway_bot
           PRIVACY_HASH_SALT: ci-privacy-hash-salt-at-least-32-bytes
+          INTERNAL_RPC_SECRET: ci-internal-rpc-secret-at-least-32-bytes
           PUBLIC_BASE_URL: https://giveaway.example.test
           SESSION_SECRET: ci-session-secret-at-least-32-bytes
           WEB_DATABASE_PASSWORD: ci-web-database-password-at-least-32-bytes
