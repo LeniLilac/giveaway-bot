@@ -1,4 +1,4 @@
-FROM node:24.13.1-bookworm-slim@sha256:a81a03dd965b4052269a57fac857004022b522a4bf06e7a739e25e18bce45af2 AS workspace
+FROM node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS workspace
 
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1 \
@@ -39,7 +39,7 @@ ENV NODE_ENV=production
 USER node
 CMD ["node", "--import", "tsx", "packages/db/src/migrate.ts"]
 
-FROM postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3 AS db-provision
+FROM postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296 AS db-provision
 RUN install -d --owner=postgres --group=postgres --mode=0750 /opt/lilac
 COPY --chmod=0555 ops/provision-db-roles.sh /usr/local/bin/provision-db-roles
 COPY --chown=postgres:postgres --chmod=0400 ops/database-runtime-roles.sql /opt/lilac/database-runtime-roles.sql
