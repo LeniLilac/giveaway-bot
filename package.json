@@ -3,8 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "workspaces": ["apps/*", "packages/*"],
-  "engines": { "node": ">=24 <25" },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "build:packages": "npm run build -w @lilac/config && npm run build -w @lilac/core && npm run build -w @lilac/proof && npm run build -w @lilac/db && npm run build -w @lilac/discord-ui",
     "build": "npm run build:packages && npm run build -w @lilac/bot && npm run build -w @lilac/worker && npm run build -w @lilac/web",
@@ -26,11 +31,11 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "eslint": "9.39.2",
-    "eslint-config-next": "16.2.10",
-    "postcss": "8.5.19",
+    "eslint-config-next": "16.3.6",
+    "postcss": "8.5.23",
     "tsx": "4.23.0",
     "typescript": "5.9.3",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "overrides": {
     "postcss": "$postcss"
