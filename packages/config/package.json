@@ -9,5 +9,5 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": { "zod": "4.4.3" }
+  "dependencies": { "zod": "4.6.5" }
 }
