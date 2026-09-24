@@ -1,5 +1,7 @@
 # Lilac Giveaway Bot
 
+Production hosting: [homelab deployment and backups](docs/homelab-deployment.md).
+
 Lilac is a Discord giveaway bot and public dashboard. It freezes the eligible participant set, publishes its SHA-256 commitment with a future drand Quicknet round, then selects weighted winners deterministically after that beacon exists.
 
 ## Features

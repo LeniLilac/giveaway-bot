@@ -1,5 +1,11 @@
 # AGENTS.md
 
+## Current production hosting
+
+Production runs on `leni-server`. Follow `docs/homelab-deployment.md` and the
+current GitHub Deploy workflow. VPS deployment addresses and commands below are
+legacy recovery references; do not reactivate the old production copy.
+
 ## Purpose
 
 Lilac Giveaway Bot runs Discord giveaways whose entry snapshot, drand beacon, and deterministic weighted selection can be inspected publicly. Preserve auditability before optimizing convenience.
